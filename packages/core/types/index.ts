@@ -247,3 +247,5 @@ export type {
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
 } from "./billing";
+
+export type { Doc, CreateDocRequest, UpdateDocRequest } from "./doc";

@@ -168,6 +168,9 @@ import type {
   CreateBillingCheckoutSessionResponse,
   BillingCheckoutSessionStatus,
   CreateBillingPortalSessionResponse,
+  Doc,
+  CreateDocRequest,
+  UpdateDocRequest,
 } from "../types";
 import type { OnboardingCompletionPath } from "../onboarding/types";
 import type { CreateFeedbackResponse, FeedbackKind } from "../feedback/types";
@@ -2150,12 +2153,12 @@ export class ApiClient {
     });
   }
 
-	async setAgentSkillEnabled(agentId: string, skillId: string, enabled: boolean): Promise<void> {
-		await this.fetch(`/api/agents/${agentId}/skills/${skillId}/enabled`, {
-			method: "PUT",
-			body: JSON.stringify({ enabled }),
-		});
-	}
+  async setAgentSkillEnabled(agentId: string, skillId: string, enabled: boolean): Promise<void> {
+    await this.fetch(`/api/agents/${agentId}/skills/${skillId}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+  }
 
   async setAgentRuntimeSkillEnabled(
     agentId: string,
@@ -2167,11 +2170,38 @@ export class ApiClient {
     });
   }
 
-	async removeAgentSkill(agentId: string, skillId: string): Promise<void> {
-		await this.fetch(`/api/agents/${agentId}/skills/${skillId}`, {
-			method: "DELETE",
-		});
-	}
+  async removeAgentSkill(agentId: string, skillId: string): Promise<void> {
+    await this.fetch(`/api/agents/${agentId}/skills/${skillId}`, {
+      method: "DELETE",
+    });
+  }
+
+  // Docs
+  async listDocs(): Promise<Doc[]> {
+    return this.fetch("/api/docs");
+  }
+
+  async getDoc(id: string): Promise<Doc> {
+    return this.fetch(`/api/docs/${id}`);
+  }
+
+  async createDoc(data: CreateDocRequest): Promise<Doc> {
+    return this.fetch("/api/docs", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateDoc(id: string, data: UpdateDocRequest): Promise<Doc> {
+    return this.fetch(`/api/docs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async archiveDoc(id: string): Promise<Doc> {
+    return this.fetch(`/api/docs/${id}`, { method: "DELETE" });
+  }
 
   // Personal Access Tokens
   async listPersonalAccessTokens(): Promise<PersonalAccessToken[]> {

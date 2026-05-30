@@ -11,7 +11,8 @@
     "usage": "用量",
     "runtimes": "运行时",
     "skills": "Skills",
-    "settings": "设置"
+    "settings": "设置",
+    "docs": "文档"
   },
   "tab": {
     "issue": "Issue",
