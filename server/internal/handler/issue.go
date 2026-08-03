@@ -2892,6 +2892,27 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// done-gate-scope.md Phase 2, log-only (Phase 3 step 1): warn, but do not
+	// yet reject, when an agent closes a delivery-gated issue with no merged
+	// PR carrying explicit close intent. actorType is resolved here (ahead
+	// of its other use below) because it must be known before the write.
+	if req.Status != nil && *req.Status == "done" && prevIssue.Status != "done" {
+		gateActorType, _ := h.resolveActor(r, userID, workspaceID)
+		if gateActorType == "agent" {
+			gated, gateErr := issueguard.IsDeliveryGated(r.Context(), h.DB, h.Queries, prevIssue)
+			if gateErr != nil {
+				slog.Warn("delivery gate check failed", append(logger.RequestAttrs(r), "error", gateErr, "issue_id", id, "workspace_id", workspaceID)...)
+			} else if gated {
+				counts, aggErr := h.Queries.GetIssuePullRequestCloseAggregate(r.Context(), prevIssue.ID)
+				if aggErr != nil {
+					slog.Warn("delivery gate aggregate check failed", append(logger.RequestAttrs(r), "error", aggErr, "issue_id", id, "workspace_id", workspaceID)...)
+				} else if counts.MergedWithCloseIntentCount == 0 {
+					slog.Warn(issueguard.UndeliveredDoneMessage, append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
+				}
+			}
+		}
+	}
+
 	issue, err := h.Queries.UpdateIssue(r.Context(), params)
 	if err != nil {
 		slog.Warn("update issue failed", append(logger.RequestAttrs(r), "error", err, "issue_id", id, "workspace_id", workspaceID)...)
@@ -3432,6 +3453,25 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 		if batchTouchedType || batchTouchedID {
 			if status, _ := h.validateAssigneePair(r.Context(), r, workspaceID, params.AssigneeType, params.AssigneeID); status != 0 {
 				continue
+			}
+		}
+
+		// done-gate-scope.md Phase 2, log-only (Phase 3 step 1): same warn-only
+		// check as UpdateIssue, so batch-closing does not silently bypass it.
+		if req.Updates.Status != nil && *req.Updates.Status == "done" && prevIssue.Status != "done" {
+			gateActorType, _ := h.resolveActor(r, userID, workspaceID)
+			if gateActorType == "agent" {
+				gated, gateErr := issueguard.IsDeliveryGated(r.Context(), h.DB, h.Queries, prevIssue)
+				if gateErr != nil {
+					slog.Warn("delivery gate check failed", "issue_id", issueID, "error", gateErr)
+				} else if gated {
+					counts, aggErr := h.Queries.GetIssuePullRequestCloseAggregate(r.Context(), prevIssue.ID)
+					if aggErr != nil {
+						slog.Warn("delivery gate aggregate check failed", "issue_id", issueID, "error", aggErr)
+					} else if counts.MergedWithCloseIntentCount == 0 {
+						slog.Warn(issueguard.UndeliveredDoneMessage, "issue_id", issueID, "workspace_id", workspaceID)
+					}
+				}
 			}
 		}
 
