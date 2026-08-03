@@ -151,12 +151,12 @@ const workspaceNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "autopilots", labelKey: "autopilots" },
   { key: "agents", labelKey: "agents" },
   { key: "squads", labelKey: "squads" },
+  { key: "docs", labelKey: "docs" },
   { key: "usage", labelKey: "usage" },
 ];
 
 const configureNav: { key: NavKey; labelKey: NavLabelKey }[] = [
   { key: "runtimes", labelKey: "runtimes" },
-  { key: "docs", labelKey: "docs" },
   { key: "skills", labelKey: "skills" },
   { key: "settings", labelKey: "settings" },
 ];

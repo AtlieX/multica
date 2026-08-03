@@ -39,6 +39,13 @@ const allowedDevOrigins = process.env.CORS_ALLOWED_ORIGINS
   : undefined;
 
 const nextConfig: NextConfig = {
+  // TEMPORARY redirect (added 2026-06-12): the root path serves the upstream
+  // Multica marketing page. Send visitors to the app login until a custom
+  // workspace.flexmedia.is landing page is built. To restore a landing page:
+  // delete this redirects() block (and build the page in app/page.tsx), then rebuild the frontend.
+  async redirects() {
+    return [{ source: "/", destination: "/login", permanent: false }];
+  },
   ...(process.env.STANDALONE === "true" ? { output: "standalone" as const } : {}),
   transpilePackages: ["@multica/core", "@multica/ui", "@multica/views"],
   ...(allowedDevOrigins && allowedDevOrigins.length > 0
