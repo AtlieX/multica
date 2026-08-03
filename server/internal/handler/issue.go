@@ -2892,15 +2892,21 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// done-gate-scope.md Phase 2, log-only (Phase 3 step 1): warn, but do not
-	// yet reject, when an agent closes a delivery-gated issue with no merged
-	// PR carrying explicit close intent. actorType is resolved here (ahead
-	// of its other use below) because it must be known before the write.
+	// done-gate-scope.md Phase 2/3: reject (not just warn) when an agent
+	// closes a delivery-gated issue with no merged PR carrying explicit
+	// close intent. actorType is resolved here (ahead of its other use
+	// below) because it must be known, and the gate must run, before the
+	// write. slog still emits UndeliveredDoneMessage on the way to the
+	// reject response so the existing Loki/Grafana panel keeps counting
+	// occurrences after the flip from log-only to reject mode.
 	if req.Status != nil && *req.Status == "done" && prevIssue.Status != "done" {
 		gateActorType, _ := h.resolveActor(r, userID, workspaceID)
 		if gateActorType == "agent" {
 			gated, gateErr := issueguard.IsDeliveryGated(r.Context(), h.DB, h.Queries, prevIssue)
 			if gateErr != nil {
+				// Fail open: an infrastructure error checking the gate must
+				// not itself become a false rejection of a real done
+				// transition.
 				slog.Warn("delivery gate check failed", append(logger.RequestAttrs(r), "error", gateErr, "issue_id", id, "workspace_id", workspaceID)...)
 			} else if gated {
 				counts, aggErr := h.Queries.GetIssuePullRequestCloseAggregate(r.Context(), prevIssue.ID)
@@ -2908,6 +2914,8 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 					slog.Warn("delivery gate aggregate check failed", append(logger.RequestAttrs(r), "error", aggErr, "issue_id", id, "workspace_id", workspaceID)...)
 				} else if counts.MergedWithCloseIntentCount == 0 {
 					slog.Warn(issueguard.UndeliveredDoneMessage, append(logger.RequestAttrs(r), "issue_id", id, "workspace_id", workspaceID)...)
+					writeError(w, http.StatusBadRequest, issueguard.UndeliveredDoneErrorMessage)
+					return
 				}
 			}
 		}
@@ -3456,8 +3464,17 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// done-gate-scope.md Phase 2, log-only (Phase 3 step 1): same warn-only
-		// check as UpdateIssue, so batch-closing does not silently bypass it.
+		// done-gate-scope.md Phase 2/3: reject (skip, not just warn) when an
+		// agent batch-closes a delivery-gated issue with no merged PR
+		// carrying explicit close intent. Consistent with every other
+		// per-issue failure in this loop (parse errors, missing issue,
+		// assignee-pair validation), a gate rejection here means "skip this
+		// one issue and keep processing the rest of the batch" rather than
+		// failing the whole request — BatchUpdateIssues' response shape
+		// (`{"updated": N}`) has no per-issue error channel to report a 400
+		// through, and adding one is a larger API change than this patch
+		// takes on. Fail open on infrastructure errors (gateErr/aggErr), same
+		// as UpdateIssue.
 		if req.Updates.Status != nil && *req.Updates.Status == "done" && prevIssue.Status != "done" {
 			gateActorType, _ := h.resolveActor(r, userID, workspaceID)
 			if gateActorType == "agent" {
@@ -3469,7 +3486,8 @@ func (h *Handler) BatchUpdateIssues(w http.ResponseWriter, r *http.Request) {
 					if aggErr != nil {
 						slog.Warn("delivery gate aggregate check failed", "issue_id", issueID, "error", aggErr)
 					} else if counts.MergedWithCloseIntentCount == 0 {
-						slog.Warn(issueguard.UndeliveredDoneMessage, "issue_id", issueID, "workspace_id", workspaceID)
+						slog.Warn(issueguard.UndeliveredDoneMessage, "issue_id", issueID, "workspace_id", workspaceID, "batch", true, "rejected", true)
+						continue
 					}
 				}
 			}

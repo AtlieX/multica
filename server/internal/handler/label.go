@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -13,7 +14,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/issueguard"
 	"github.com/multica-ai/multica/server/internal/logger"
+	"github.com/multica-ai/multica/server/internal/util"
 	db "github.com/multica-ai/multica/server/pkg/db/generated"
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
@@ -463,6 +466,56 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("AttachLabelToIssue failed", append(logger.RequestAttrs(r), "error", err)...)
 		writeError(w, http.StatusInternalServerError, "failed to attach label")
 		return
+	}
+
+	// Escape hatch audit trail (done-gate-scope.md "Escape hatch"): applying
+	// no-code-delivery must be visible, not silent, since it exempts the
+	// issue from the delivery gate. Best-effort — a comment failure here
+	// must not undo the already-committed label attach.
+	if strings.EqualFold(label.Name, issueguard.NoCodeDeliveryLabel) {
+		actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
+		// Plain name, deliberately NOT a mention://agent/<uuid> or
+		// mention://member/<uuid> link — those enqueue/notify the referenced
+		// actor on submit (comment.go's sanitizeNullBytes comment, GH #5388),
+		// which would wake the very agent that just applied this label
+		// every time the escape hatch is used. This comment is an audit
+		// trail, not a trigger.
+		actorLabel := "a member"
+		if actorType == "agent" {
+			actorLabel = "an agent"
+			if actorUUID, err := util.ParseUUID(actorID); err == nil {
+				if a, aerr := h.Queries.GetAgent(r.Context(), actorUUID); aerr == nil {
+					actorLabel = fmt.Sprintf("agent %q", a.Name)
+				}
+			}
+		} else {
+			if actorUUID, err := util.ParseUUID(actorID); err == nil {
+				if u, uerr := h.Queries.GetUser(r.Context(), actorUUID); uerr == nil {
+					actorLabel = fmt.Sprintf("%q", u.Name)
+				}
+			}
+		}
+		content := fmt.Sprintf(
+			"%s applied the `%s` label, exempting this issue from the delivery gate (done-gate-scope.md Phase 2/3) — it can be marked `done` without a merged PR.",
+			actorLabel, issueguard.NoCodeDeliveryLabel,
+		)
+		comment, cErr := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
+			IssueID:     issue.ID,
+			WorkspaceID: issue.WorkspaceID,
+			AuthorType:  "system",
+			AuthorID:    pgtype.UUID{Valid: true},
+			Content:     content,
+			Type:        "system",
+			ParentID:    pgtype.UUID{Valid: false},
+		})
+		if cErr != nil {
+			slog.Warn("no-code-delivery escape-hatch comment failed", append(logger.RequestAttrs(r), "error", cErr, "issue_id", uuidToString(issue.ID))...)
+		} else {
+			h.publish(protocol.EventCommentCreated, uuidToString(issue.WorkspaceID), "system", "", map[string]any{
+				"comment":     commentToResponse(comment, nil, nil),
+				"issue_title": issue.Title,
+			})
+		}
 	}
 
 	// Read the updated label list; on read failure, the attach is already

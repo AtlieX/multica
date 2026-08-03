@@ -14,10 +14,11 @@ import (
 const DeliveryGateLabel = "code"
 
 // NoCodeDeliveryLabel is the escape hatch: applying it to a delivery-gated
-// issue exempts it, and the exemption must be recorded as a system comment
-// naming who applied it (done-gate-scope.md "Escape hatch"). Checking for
-// this label is the caller's responsibility — IsDeliveryGated only reports
-// whether an issue would otherwise be gated.
+// issue exempts it from IsDeliveryGated entirely (checked first, before any
+// of the three gating criteria). Attaching this label posts a system
+// comment naming who applied it — see AttachLabelToIssue's caller in
+// internal/handler/label.go — so the exemption is visible, not silent
+// (done-gate-scope.md "Escape hatch").
 const NoCodeDeliveryLabel = "no-code-delivery"
 
 // CodeWritingAgentNames are agent names treated as code-writing for
@@ -81,8 +82,19 @@ type dbExecutor interface {
 // IsDeliveryGated implements done-gate-scope.md's three criteria for an
 // issue being delivery-gated: label "code", an existing PR link, or an
 // assignee that is a code-writing agent. Non-agent assignees (member,
-// squad, or unassigned) never satisfy criterion 3.
+// squad, or unassigned) never satisfy criterion 3. The no-code-delivery
+// label is checked first and short-circuits to ungated regardless of the
+// other three criteria — it is an unconditional exemption, not a fourth
+// criterion to weigh against the others.
 func IsDeliveryGated(ctx context.Context, db_ dbExecutor, q *db.Queries, issue db.Issue) (bool, error) {
+	exempt, err := HasIssueLabel(ctx, db_, issue.ID, issue.WorkspaceID, NoCodeDeliveryLabel)
+	if err != nil {
+		return false, err
+	}
+	if exempt {
+		return false, nil
+	}
+
 	hasLabel, err := HasIssueLabel(ctx, db_, issue.ID, issue.WorkspaceID, DeliveryGateLabel)
 	if err != nil {
 		return false, err
@@ -115,7 +127,13 @@ func IsDeliveryGated(ctx context.Context, db_ dbExecutor, q *db.Queries, issue d
 	return false, nil
 }
 
-// UndeliveredDoneMessage is the log message emitted (Phase 3: log-only,
-// not rejected) when an agent closes a delivery-gated issue with no merged
-// PR carrying explicit close intent.
+// UndeliveredDoneMessage is the log message emitted (Phase 3 step 1,
+// log-only) when an agent closes a delivery-gated issue with no merged PR
+// carrying explicit close intent. Kept even after Phase 3 step 2 (reject
+// mode) enables actual rejection, since it's also useful as a metrics
+// signal independent of the HTTP error path.
 const UndeliveredDoneMessage = "agent closed a delivery-gated code issue with no merged PR carrying close intent"
+
+// UndeliveredDoneErrorMessage is the HTTP error body returned (Phase 3 step
+// 2, reject mode) when the same condition blocks the write outright.
+const UndeliveredDoneErrorMessage = "cannot close a code task with no merged PR — push the branch and open a PR with \"Fixes <ID>\" in the body, or apply the no-code-delivery label"
