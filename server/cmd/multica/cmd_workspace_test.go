@@ -347,6 +347,46 @@ func TestRunWorkspaceSwitch(t *testing.T) {
 	})
 }
 
+// TestRunWorkspaceSwitchRejectsAgentExecutionContext covers SLM-165: inside a
+// daemon-dispatched agent task, the workspace is bound by MULTICA_WORKSPACE_ID
+// and resolveWorkspaceID never falls back to profile config at all (MUL-2600).
+// Before this fix, `workspace switch` would still resolve the target
+// workspace, genuinely write it to the profile file on disk, and print
+// "Switched to workspace: X" — reporting success on a write that every
+// subsequent command in the same task silently ignores. It must fail before
+// making that promise.
+func TestRunWorkspaceSwitchRejectsAgentExecutionContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]map[string]any{
+			{"id": "11111111-1111-1111-1111-111111111111", "name": "Alpha", "slug": "alpha"},
+		})
+	}))
+	defer srv.Close()
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("MULTICA_SERVER_URL", srv.URL)
+	t.Setenv("MULTICA_TOKEN", "mat_task_token")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-bound-by-daemon")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+
+	cmd := newWorkspaceSwitchTestCmd()
+	err := runWorkspaceSwitch(cmd, []string{"alpha"})
+	if err == nil {
+		t.Fatal("runWorkspaceSwitch: expected error inside agent execution context")
+	}
+	if !strings.Contains(err.Error(), "MUL-2600") {
+		t.Fatalf("runWorkspaceSwitch() error = %q, want it to explain the MUL-2600 binding", err.Error())
+	}
+
+	// Confirm no config file was written for this profile — the whole point
+	// of failing early is that no misleading state lands on disk.
+	path, _ := cli.CLIConfigPathForProfile("")
+	if _, statErr := os.Stat(path); statErr == nil {
+		t.Errorf("expected no config file at %s, but one was written", path)
+	}
+}
+
 func TestResolveWorkspaceByIDOrSlug(t *testing.T) {
 	workspaces := []workspaceSummary{
 		{ID: "11111111-1111-1111-1111-111111111111", Name: "Alpha", Slug: "alpha"},

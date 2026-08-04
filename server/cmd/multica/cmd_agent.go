@@ -273,6 +273,27 @@ func newAPIClient(cmd *cobra.Command) (*cli.APIClient, error) {
 		return nil, fmt.Errorf("agent execution context requires MULTICA_TOKEN to be a task-scoped mat_ token")
 	}
 
+	// A mat_ task token is server-bound to exactly one workspace (MUL-2600):
+	// the server silently discards any other workspace identifier on the
+	// request (flag, env, header, URL param) and substitutes the token's own
+	// bound workspace — by design, so a task cannot widen its blast radius.
+	// That means an agent that passes --workspace-id (or a MULTICA_WORKSPACE_ID
+	// that differs from what the daemon itself set) gets HTTP 200 with data
+	// from the WRONG workspace and no error at all: the single most-reported
+	// confusing failure mode of this CLI in agent context (see SLM-165). Fail
+	// loudly here instead, client-side, before the doomed request ever goes
+	// out — the daemon's own MULTICA_WORKSPACE_ID is the one value in this
+	// process that is guaranteed to match what the server will actually use.
+	if strings.HasPrefix(token, "mat_") {
+		daemonWorkspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
+		if daemonWorkspaceID != "" && workspaceID != "" && workspaceID != daemonWorkspaceID {
+			return nil, fmt.Errorf(
+				"cannot target workspace %s: this task's mat_ token is bound to workspace %s and the server will silently ignore any other workspace_id — a task-scoped token cannot access another workspace's data by design (MUL-2600). If you need cross-workspace access, this must be done outside agent execution context (e.g. by a human running an interactive profile), not from inside a dispatched task",
+				workspaceID, daemonWorkspaceID,
+			)
+		}
+	}
+
 	client := cli.NewAPIClient(serverURL, workspaceID, token)
 	// When running inside a daemon task, attribute actions to the agent.
 	if agentID := os.Getenv("MULTICA_AGENT_ID"); agentID != "" {

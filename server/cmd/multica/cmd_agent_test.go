@@ -466,6 +466,80 @@ func TestNewAPIClient_AgentContextRequiresTaskToken(t *testing.T) {
 	})
 }
 
+// cmdWithWorkspaceIDFlag returns a standalone cobra.Command with the global
+// --workspace-id flag registered, matching rootCmd's PersistentFlags setup in
+// main.go. testCmd() only registers --profile, so a --workspace-id-specific
+// helper is needed for tests that set the flag directly.
+func cmdWithWorkspaceIDFlag() *cobra.Command {
+	c := &cobra.Command{}
+	c.PersistentFlags().String("profile", "", "")
+	c.PersistentFlags().String("workspace-id", "", "")
+	return c
+}
+
+// TestNewAPIClient_TaskTokenWorkspaceMismatchFailsClosed covers SLM-165: a
+// mat_ task token is server-bound to exactly one workspace (MUL-2600), and
+// the server silently discards any other workspace_id the client sends and
+// substitutes its own — a request that LOOKS correctly scoped returns HTTP
+// 200 with data from the wrong workspace, with no error anywhere. This must
+// be caught client-side before the doomed request goes out, using the
+// daemon's own MULTICA_WORKSPACE_ID (guaranteed correct, since the daemon set
+// it) as the source of truth to compare any explicit override against.
+func TestNewAPIClient_TaskTokenWorkspaceMismatchFailsClosed(t *testing.T) {
+	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:8080")
+	t.Setenv("MULTICA_WORKSPACE_ID", "workspace-bound-by-daemon")
+	t.Setenv("MULTICA_AGENT_ID", "agent-123")
+	t.Setenv("MULTICA_TASK_ID", "task-456")
+	t.Setenv("MULTICA_TOKEN", "mat_task_token")
+
+	t.Run("explicit --workspace-id matching the daemon's binding succeeds", func(t *testing.T) {
+		cmd := cmdWithWorkspaceIDFlag()
+		// cmd.Flags().Changed(...) (what FlagOrEnv checks) only reflects
+		// PersistentFlags().Set(...) after cobra's normal parse lifecycle —
+		// ParseFlags mirrors how a real `multica agent list --workspace-id X`
+		// invocation actually populates Changed().
+		if err := cmd.ParseFlags([]string{"--workspace-id", "workspace-bound-by-daemon"}); err != nil {
+			t.Fatalf("parse flags: %v", err)
+		}
+
+		client, err := newAPIClient(cmd)
+		if err != nil {
+			t.Fatalf("newAPIClient(): %v", err)
+		}
+		if client.WorkspaceID != "workspace-bound-by-daemon" {
+			t.Fatalf("client.WorkspaceID = %q, want the daemon-bound workspace", client.WorkspaceID)
+		}
+	})
+
+	t.Run("explicit --workspace-id targeting a different workspace fails closed", func(t *testing.T) {
+		cmd := cmdWithWorkspaceIDFlag()
+		if err := cmd.ParseFlags([]string{"--workspace-id", "some-other-workspace"}); err != nil {
+			t.Fatalf("parse flags: %v", err)
+		}
+
+		_, err := newAPIClient(cmd)
+		if err == nil {
+			t.Fatal("newAPIClient(): expected error when --workspace-id differs from the task token's bound workspace")
+		}
+		if !strings.Contains(err.Error(), "MUL-2600") {
+			t.Fatalf("newAPIClient() error = %q, want it to explain the MUL-2600 binding", err.Error())
+		}
+		if !strings.Contains(err.Error(), "some-other-workspace") || !strings.Contains(err.Error(), "workspace-bound-by-daemon") {
+			t.Fatalf("newAPIClient() error = %q, want it to name both the requested and bound workspace", err.Error())
+		}
+	})
+
+	t.Run("no explicit --workspace-id relies on daemon env and succeeds", func(t *testing.T) {
+		client, err := newAPIClient(testCmd())
+		if err != nil {
+			t.Fatalf("newAPIClient(): %v", err)
+		}
+		if client.WorkspaceID != "workspace-bound-by-daemon" {
+			t.Fatalf("client.WorkspaceID = %q, want the daemon-bound workspace", client.WorkspaceID)
+		}
+	})
+}
+
 func TestNewAPIClient_DaemonPortRequiresTaskToken(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("MULTICA_SERVER_URL", "http://127.0.0.1:8080")

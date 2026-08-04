@@ -352,6 +352,19 @@ func resolveWorkspaceRef(ctx context.Context, cmd *cobra.Command, input string) 
 }
 
 func runWorkspaceSwitch(cmd *cobra.Command, args []string) error {
+	// Inside agent execution context, resolveWorkspaceID never consults the
+	// profile config file at all (it is daemon-bound: MULTICA_WORKSPACE_ID /
+	// --workspace-id / mat_ token, never the profile default — see
+	// resolveWorkspaceID and MUL-2600). Writing a new default there is not
+	// merely a no-op, it actively lies: the command reports success ("Switched
+	// to workspace: X") and the write genuinely lands on disk, but every
+	// subsequent command in the same task keeps using the daemon-bound
+	// workspace and silently ignores the file this just wrote (SLM-165). Fail
+	// before making that promise instead of after breaking it.
+	if inDaemonManagedExecutionContext() {
+		return fmt.Errorf("cannot switch the default workspace inside agent execution context: this task's workspace is bound by the daemon (MULTICA_WORKSPACE_ID) and cannot be changed by writing to profile config — a task-scoped token is restricted to its own workspace by design (MUL-2600), and 'workspace switch' here would silently have no effect on any command that follows it in this task")
+	}
+
 	ctx, cancel := cli.APIContext(context.Background())
 	defer cancel()
 
