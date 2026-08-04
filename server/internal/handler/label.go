@@ -472,7 +472,9 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 	// no-code-delivery must be visible, not silent, since it exempts the
 	// issue from the delivery gate. Best-effort — a comment failure here
 	// must not undo the already-committed label attach.
-	if strings.EqualFold(label.Name, issueguard.NoCodeDeliveryLabel) {
+	isNoCodeDelivery := strings.EqualFold(label.Name, issueguard.NoCodeDeliveryLabel)
+	isResolvedElsewhere := strings.EqualFold(label.Name, issueguard.ResolvedElsewhereLabel)
+	if isNoCodeDelivery || isResolvedElsewhere {
 		actorType, actorID := h.resolveActor(r, userID, uuidToString(issue.WorkspaceID))
 		// Plain name, deliberately NOT a mention://agent/<uuid> or
 		// mention://member/<uuid> link — those enqueue/notify the referenced
@@ -495,10 +497,18 @@ func (h *Handler) AttachLabel(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		content := fmt.Sprintf(
-			"%s applied the `%s` label, exempting this issue from the delivery gate (done-gate-scope.md Phase 2/3) — it can be marked `done` without a merged PR.",
-			actorLabel, issueguard.NoCodeDeliveryLabel,
-		)
+		var content string
+		if isResolvedElsewhere {
+			content = fmt.Sprintf(
+				"%s applied the `%s` label, exempting this issue from the delivery gate (done-gate-scope.md Phase 2/3) — verified resolved by other merged work; it can be marked `done` without a merged PR of its own.",
+				actorLabel, issueguard.ResolvedElsewhereLabel,
+			)
+		} else {
+			content = fmt.Sprintf(
+				"%s applied the `%s` label, exempting this issue from the delivery gate (done-gate-scope.md Phase 2/3) — it can be marked `done` without a merged PR.",
+				actorLabel, issueguard.NoCodeDeliveryLabel,
+			)
+		}
 		comment, cErr := h.Queries.CreateComment(r.Context(), db.CreateCommentParams{
 			IssueID:     issue.ID,
 			WorkspaceID: issue.WorkspaceID,

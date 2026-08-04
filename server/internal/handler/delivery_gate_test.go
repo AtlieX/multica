@@ -303,6 +303,54 @@ func TestDeliveryGate_NoCodeDeliveryLabelAlonePostsAuditComment(t *testing.T) {
 	}
 }
 
+// TestDeliveryGate_ResolvedElsewhereLabelExemptsFromRejection is the escape
+// hatch's core guarantee: applying resolved-elsewhere to an otherwise-gated
+// (labeled "code", no PR) issue must let the agent close it successfully.
+func TestDeliveryGate_ResolvedElsewhereLabelExemptsFromRejection(t *testing.T) {
+	issue := newDeliveryGateFixture(t, "in_progress")
+	attachCodeLabel(t, issue.ID)
+	attachLabelViaAPI(t, issue.ID, issueguard.ResolvedElsewhereLabel)
+
+	agentID := createHandlerTestAgent(t, "delivery-gate-agent-4", nil)
+	taskID := createHandlerTestTaskForAgentOnIssue(t, agentID, issue.ID)
+	logs := captureLogs(t)
+
+	w := updateIssueStatusAsAgent(t, issue.ID, "done", agentID, taskID)
+	if w.Code != http.StatusOK {
+		t.Fatalf("UpdateIssue: expected 200, the resolved-elsewhere label must exempt this issue even though it also carries \"code\", got %d: %s", w.Code, w.Body.String())
+	}
+
+	if got := logs.String(); containsUndeliveredWarning(got) {
+		t.Fatalf("resolved-elsewhere label should fully exempt the issue, got log:\n%s", got)
+	}
+}
+
+// TestDeliveryGate_ResolvedElsewhereLabelAlonePostsAuditComment verifies the
+// escape hatch is visible, not silent (done-gate-scope.md "Escape hatch"):
+// attaching the label must post a system comment naming the actor, and
+// that comment must NOT be a triggering mention://agent/ or
+// mention://member/ link (which would wake the referenced actor as a side
+// effect of applying the exemption — see label.go's AttachLabel).
+func TestDeliveryGate_ResolvedElsewhereLabelAlonePostsAuditComment(t *testing.T) {
+	issue := newDeliveryGateFixture(t, "in_progress")
+
+	before := countSystemCommentsOn(t, issue.ID)
+	attachLabelViaAPI(t, issue.ID, issueguard.ResolvedElsewhereLabel)
+	after := countSystemCommentsOn(t, issue.ID)
+
+	if after != before+1 {
+		t.Fatalf("expected exactly one new system comment from the escape-hatch label attach, before=%d after=%d", before, after)
+	}
+
+	content, _, _, _ := systemCommentOn(t, issue.ID)
+	if !bytes.Contains([]byte(content), []byte(issueguard.ResolvedElsewhereLabel)) {
+		t.Fatalf("expected the audit comment to name the %s label, got: %s", issueguard.ResolvedElsewhereLabel, content)
+	}
+	if bytes.Contains([]byte(content), []byte("mention://agent/")) || bytes.Contains([]byte(content), []byte("mention://member/")) {
+		t.Fatalf("escape-hatch audit comment must not be a triggering mention, got: %s", content)
+	}
+}
+
 // TestDeliveryGate_CodeLabelAloneDoesNotPostAuditComment guards against a
 // future refactor accidentally posting the escape-hatch comment for every
 // label attach instead of only no-code-delivery.

@@ -21,6 +21,17 @@ const DeliveryGateLabel = "code"
 // (done-gate-scope.md "Escape hatch").
 const NoCodeDeliveryLabel = "no-code-delivery"
 
+// ResolvedElsewhereLabel is the second escape hatch: for a genuine code
+// issue that was actually fixed, but by a PR that never linked back to it
+// (e.g. one PR resolving several review comments at once without citing
+// every issue ID in its body), so the webhook never created an
+// issue_pull_request row and auto-advance never fired. Unlike
+// NoCodeDeliveryLabel, this does not claim the issue was never code — it
+// asserts the code work is done and verified, just not through the normal
+// PR-link path. Same audit-comment treatment as NoCodeDeliveryLabel: never
+// silent, see internal/handler/label.go.
+const ResolvedElsewhereLabel = "resolved-elsewhere"
+
 // CodeWritingAgentNames are agent names treated as code-writing for
 // criterion 3 of the delivery gate. There is no dedicated "role" column on
 // agent (only Kind, which distinguishes system/user agents), so this is a
@@ -82,16 +93,24 @@ type dbExecutor interface {
 // IsDeliveryGated implements done-gate-scope.md's three criteria for an
 // issue being delivery-gated: label "code", an existing PR link, or an
 // assignee that is a code-writing agent. Non-agent assignees (member,
-// squad, or unassigned) never satisfy criterion 3. The no-code-delivery
-// label is checked first and short-circuits to ungated regardless of the
-// other three criteria — it is an unconditional exemption, not a fourth
-// criterion to weigh against the others.
+// squad, or unassigned) never satisfy criterion 3. NoCodeDeliveryLabel and
+// ResolvedElsewhereLabel are both checked first and short-circuit to
+// ungated regardless of the other three criteria — unconditional
+// exemptions, not a fourth criterion to weigh against the others.
 func IsDeliveryGated(ctx context.Context, db_ dbExecutor, q *db.Queries, issue db.Issue) (bool, error) {
 	exempt, err := HasIssueLabel(ctx, db_, issue.ID, issue.WorkspaceID, NoCodeDeliveryLabel)
 	if err != nil {
 		return false, err
 	}
 	if exempt {
+		return false, nil
+	}
+
+	resolvedElsewhere, err := HasIssueLabel(ctx, db_, issue.ID, issue.WorkspaceID, ResolvedElsewhereLabel)
+	if err != nil {
+		return false, err
+	}
+	if resolvedElsewhere {
 		return false, nil
 	}
 
@@ -136,4 +155,4 @@ const UndeliveredDoneMessage = "agent closed a delivery-gated code issue with no
 
 // UndeliveredDoneErrorMessage is the HTTP error body returned (Phase 3 step
 // 2, reject mode) when the same condition blocks the write outright.
-const UndeliveredDoneErrorMessage = "cannot close a code task with no merged PR — push the branch and open a PR with \"Fixes <ID>\" in the body, or apply the no-code-delivery label"
+const UndeliveredDoneErrorMessage = "cannot close a code task with no merged PR — push the branch and open a PR with \"Fixes <ID>\" in the body, apply the no-code-delivery label if it isn't actually code, or apply the resolved-elsewhere label if it was already fixed by a different, unlinked PR"
