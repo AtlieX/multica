@@ -8,12 +8,15 @@ sees the request and the rule never runs — HubSpot answers instead, redirectin
 the apex to www and then serving a 404.
 
 Changes, web records only:
-  hbhf.is       A     199.60.103.69/.169  (HubSpot, unproxied)  ->  A 192.0.2.1 proxied
-  www.hbhf.is   CNAME …hscoscdn-eu1.net   (HubSpot, unproxied)  ->  A 192.0.2.1 proxied
+  hbhf.is       A     199.60.103.69/.169  (HubSpot, unproxied)  ->  AAAA 100:: proxied
+  www.hbhf.is   CNAME …hscoscdn-eu1.net   (HubSpot, unproxied)  ->  AAAA 100:: proxied
 
-192.0.2.1 is TEST-NET-1 (RFC 5737) — a deliberately unroutable placeholder. The
-origin is never contacted because the Redirect Rule answers at Cloudflare's edge
-before any origin fetch, so the address only has to exist, not respond.
+100:: is Cloudflare's documented discard address for redirect-only hostnames.
+
+Do NOT use 192.0.2.1 (TEST-NET-1) here — that was tried first and is wrong.
+Cloudflare's edge refuses to proxy to it and returns error 1034 (Edge IP
+Restricted) on any request the Redirect Rule does not answer from cache, so the
+apex intermittently 403s instead of redirecting.
 
 MX and TXT records are NOT touched. hbhf.is runs Google Workspace mail and SPF/
 DMARC; proxying only affects HTTP, so mail keeps working.
@@ -30,7 +33,7 @@ ZONE = "0cc6ea2ad54761984832911fd1d74922"  # hbhf.is
 TOKEN = os.environ.get("CF_TOKEN", "")
 APPLY = "--apply" in sys.argv
 
-PLACEHOLDER = "192.0.2.1"
+PLACEHOLDER = "100::"
 TARGETS = ["hbhf.is", "www.hbhf.is"]
 
 BASE = f"https://api.cloudflare.com/client/v4/zones/{ZONE}/dns_records"
@@ -79,7 +82,7 @@ def main():
         print("DRY RUN — re-run with --apply to make these changes:")
         for name in TARGETS:
             print(f"    delete existing web records for {name}")
-            print(f"    create  A {name} -> {PLACEHOLDER} (proxied)")
+            print(f"    create  AAAA {name} -> {PLACEHOLDER} (proxied)")
         return
 
     for name in TARGETS:
@@ -93,7 +96,7 @@ def main():
             "POST",
             BASE,
             {
-                "type": "A",
+                "type": "AAAA",
                 "name": name,
                 "content": PLACEHOLDER,
                 "proxied": True,
@@ -101,7 +104,7 @@ def main():
             },
         )
         if res.get("success"):
-            print(f"  + created A {name} -> {PLACEHOLDER} (proxied)")
+            print(f"  + created AAAA {name} -> {PLACEHOLDER} (proxied)")
         else:
             print(f"  ! create {name} FAILED: {res.get('errors')}")
 
