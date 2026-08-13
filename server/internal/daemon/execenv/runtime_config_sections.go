@@ -304,14 +304,18 @@ func writeCommentFormatting(b *strings.Builder) {
 }
 
 // writeRepositories emits the Repositories section when at least one repo
-// is configured. The closing paragraph from the legacy version is dropped
-// (it re-stated the opening); intro is tightened into one line.
+// is configured. Framed as an imperative first-step instruction, not passive
+// documentation: a 2026-08-13 incident (IPS-434) showed a Codex-runtime agent
+// treating this section as background info, never running `multica repo
+// checkout`, then finding an empty workdir and free-ranging the filesystem
+// for a substitute checkout -- landing on an unrelated repo and merging a PR
+// there instead of the intended one.
 func writeRepositories(b *strings.Builder, ctx TaskContextForEnv) {
 	if len(ctx.Repos) == 0 {
 		return
 	}
 	b.WriteString("## Repositories\n\n")
-	b.WriteString("Available in this workspace — `multica repo checkout <url> [--ref <branch-or-sha>]` to fetch (creates a repository checkout on a dedicated branch).\n\n")
+	b.WriteString("**Before inspecting or editing any code, check out every repo listed below.** Your workdir starts empty -- no repo is pre-cloned. Run `multica repo checkout <url> [--ref <branch-or-sha>]` for each one now (creates a repository checkout on a dedicated branch); do this before your first `git`/file-exploration command, not after discovering the workdir is empty. If checkout fails, stop and report it -- never search elsewhere on disk for a substitute checkout of a different repo.\n\n")
 	for _, repo := range ctx.Repos {
 		if repo.Description != "" {
 			fmt.Fprintf(b, "- %s — %s\n", repo.URL, repo.Description)
