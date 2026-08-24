@@ -303,15 +303,29 @@ func writeCommentFormatting(b *strings.Builder) {
 	b.WriteString("For issue comments, **always write the comment body to a UTF-8 file with your file-write tool first, then post it with `--content-file <path>`**. Never use inline `--content` for agent-authored comments — the shell rewrites backticks / `$()` / quotes in the body (MUL-2904). Never use `--content-stdin` with a HEREDOC alongside other flags either — the heredoc/flag boundary is fragile and flags get silently swallowed (#4182). Write that file inside your working directory (`./reply.md`), never `/tmp` or shared paths — the CLI rejects a `--content-file` path outside the workdir so another run's stale file can't leak in (MUL-4252). Keep the same `--parent` value from the trigger comment when replying. Delete the temp file (`rm ./reply.md`) after posting; do not rely on `\\n` escapes.\n\n")
 }
 
-// writeRepositories emits the Repositories section when at least one repo
-// is configured. Framed as an imperative first-step instruction, not passive
-// documentation: a 2026-08-13 incident (IPS-434) showed a Codex-runtime agent
-// treating this section as background info, never running `multica repo
-// checkout`, then finding an empty workdir and free-ranging the filesystem
-// for a substitute checkout -- landing on an unrelated repo and merging a PR
-// there instead of the intended one.
+// writeRepositories emits the Repositories section. Framed as an imperative
+// first-step instruction, not passive documentation: a 2026-08-13 incident
+// (IPS-434) showed a Codex-runtime agent treating this section as background
+// info, never running `multica repo checkout`, then finding an empty workdir
+// and free-ranging the filesystem for a substitute checkout -- landing on an
+// unrelated repo and merging a PR there instead of the intended one.
+//
+// The zero-repo case gets its own block rather than an early return. A managed
+// workdir is ALWAYS created empty (execenv.go: no repo is ever pre-cloned), so
+// staying silent here left the agent with the least context in exactly the
+// situation where it has no repo list to recover from -- the state most likely
+// to send it hunting across the filesystem. SLM-228 (2026-08-24) hit the
+// adjacent case: a stale daemon shipped the pre-IPS-434 passive wording, the
+// agent never ran checkout, and it reported the repo mapping as missing when
+// it was in fact present. Local_directory tasks are exempt: their workdir is
+// the user's own populated path, so "empty workdir" advice would be wrong.
 func writeRepositories(b *strings.Builder, ctx TaskContextForEnv) {
 	if len(ctx.Repos) == 0 {
+		if ctx.LocalDirectory {
+			return
+		}
+		b.WriteString("## Repositories\n\n")
+		b.WriteString("**No repositories are configured for this task, and your workdir is intentionally empty** -- a managed workdir never has a repo pre-cloned, and there is no repo URL available to check one out from. If this task needs source code, that is a dispatch/setup gap, not something to route around: say so in a comment and stop. Do NOT search `~/Work`, `/home`, or anywhere else on disk for a plausible-looking checkout -- a directory matching by name is not evidence it is the right repo, and editing one has already produced a PR merged into the wrong repository (IPS-434).\n\n")
 		return
 	}
 	b.WriteString("## Repositories\n\n")

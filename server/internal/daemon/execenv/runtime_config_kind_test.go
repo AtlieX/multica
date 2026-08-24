@@ -282,3 +282,53 @@ func TestBackgroundTaskSafetySlimHardPins(t *testing.T) {
 		t.Errorf("slim Background Task Safety must not reintroduce the ambiguous \"The rules above\" scoping sentence\n---\n%s", out)
 	}
 }
+
+// TestWriteRepositoriesZeroRepos locks in the zero-repo behaviour. Before
+// SLM-228 (2026-08-24) this path was a bare `return`: a task with no repos
+// mapped got an empty managed workdir AND no Repositories section at all,
+// which is the state most likely to send an agent hunting the filesystem for
+// a substitute checkout (the IPS-434 failure). The section must now be
+// emitted with an explicit "intentionally empty, do not go looking" block --
+// except for local_directory tasks, whose workdir is the user's own populated
+// path and for which "empty workdir" advice would be actively wrong.
+func TestWriteRepositoriesZeroRepos(t *testing.T) {
+	t.Run("managed workdir warns", func(t *testing.T) {
+		var b strings.Builder
+		writeRepositories(&b, TaskContextForEnv{})
+		out := b.String()
+		if !strings.Contains(out, "## Repositories") {
+			t.Fatalf("zero-repo managed task must still get a Repositories section\n---\n%s", out)
+		}
+		for _, want := range []string{
+			"your workdir is intentionally empty",
+			"Do NOT search",
+			"IPS-434",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("zero-repo block missing %q\n---\n%s", want, out)
+			}
+		}
+	})
+
+	t.Run("local_directory stays silent", func(t *testing.T) {
+		var b strings.Builder
+		writeRepositories(&b, TaskContextForEnv{LocalDirectory: true})
+		if out := b.String(); out != "" {
+			t.Errorf("local_directory task must get no Repositories section, got:\n%s", out)
+		}
+	})
+
+	t.Run("repos present keeps checkout imperative", func(t *testing.T) {
+		var b strings.Builder
+		writeRepositories(&b, TaskContextForEnv{
+			Repos: []RepoContextForEnv{{URL: "https://example.com/x.git"}},
+		})
+		out := b.String()
+		if !strings.Contains(out, "multica repo checkout") {
+			t.Errorf("repo-bearing task must name the checkout command\n---\n%s", out)
+		}
+		if strings.Contains(out, "intentionally empty") {
+			t.Errorf("repo-bearing task must not get the zero-repo block\n---\n%s", out)
+		}
+	})
+}

@@ -120,6 +120,11 @@ type TaskContextForEnv struct {
 	AgentSkills                   []SkillContextForEnv
 	DisabledRuntimeSkills         []RuntimeSkillRefForEnv
 	Repos                         []RepoContextForEnv     // workspace repos available for checkout
+	// LocalDirectory mirrors PrepareParams.LocalWorkDir != "" -- true when the
+	// agent runs in a user-owned directory instead of a managed workdir. The
+	// brief reads it to suppress the zero-repo "your workdir is intentionally
+	// empty" warning, which is only true of managed workdirs.
+	LocalDirectory                bool
 	ProjectID                     string                  // active project for this task, when present
 	ProjectTitle                  string                  // human-readable project title
 	ProjectDescription            string                  // durable project-level context, rendered into the brief's Project Context section

@@ -4842,6 +4842,13 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		instructions = task.Agent.Instructions
 	}
 
+	// Resolve any local_directory assignment before building the brief
+	// context: the zero-repo Repositories block is suppressed for a
+	// local_directory task, whose workdir is the user's own populated path
+	// rather than an empty managed one. Pure function of (task, daemonID),
+	// so resolving it here and again below is safe and side-effect free.
+	briefLocalAssignment, _ := localDirectoryAssignmentForTask(task, d.cfg.DaemonID)
+
 	// Prepare isolated execution environment.
 	// Repos are passed as metadata only — the agent checks them out on demand
 	// via `multica repo checkout <url>`.
@@ -4864,6 +4871,7 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 		AgentSkills:                      convertSkillsForEnv(skills),
 		DisabledRuntimeSkills:            convertDisabledRuntimeSkillsForEnv(task.Agent, task.RuntimeID, provider),
 		Repos:                            convertReposForEnv(task.Repos),
+		LocalDirectory:                   briefLocalAssignment != nil,
 		ProjectID:                        task.ProjectID,
 		ProjectTitle:                     task.ProjectTitle,
 		ProjectDescription:               task.ProjectDescription,
