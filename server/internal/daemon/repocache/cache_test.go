@@ -3,6 +3,7 @@ package repocache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -1875,5 +1876,46 @@ func TestBarePathIsIndependentOfExistence(t *testing.T) {
 	}
 	if cache.Lookup("ws-1", "https://example.com/acme/widgets.git") != "" {
 		t.Error("Lookup must still report an uncached repo as absent")
+	}
+}
+
+// TestTaskKeyMatchesExecenvContract pins this package's copy of the task-segment
+// rule. execenv, repocache and the agent handler each carry one — execenv owns
+// the canonical taskKey, and the handler has a contract test against
+// PredictRootDir, but this copy had none and could drift silently.
+//
+// Both properties matter. The segment must come from the id's random TAIL:
+// UUIDv7 leads with a millisecond timestamp, so a leading slice is identical
+// for every task created in the same ~65.5s window, which gave two concurrent
+// tasks of one agent the same branch name (#7326). And it must stay SHORT: a
+// branch name becomes a path under .git/refs/heads/ inside the task checkout,
+// where Windows enforces MAX_PATH.
+func TestTaskKeyMatchesExecenvContract(t *testing.T) {
+	t.Parallel()
+	const id = "01a01ec0-e69d-7000-8000-0123456789ab"
+	if got, want := taskKey(id), "0123456789ab"; got != want {
+		t.Fatalf("taskKey(%q) = %q, want %q — the segment must be the random tail, not the timestamp head", id, got, want)
+	}
+	if got := taskKey(id); len(got) != taskKeyLen {
+		t.Fatalf("taskKey len = %d, want %d — long segments overflow MAX_PATH on Windows", len(got), taskKeyLen)
+	}
+	if got := taskKey("abc"); got != "abc" {
+		t.Fatalf("taskKey on a sub-length input = %q, want it returned as-is", got)
+	}
+}
+
+// TestBranchNameUsesIssueIdentifier pins the branch source of truth: the
+// issue key must be visible in the ref, and two different issues cannot
+// collapse onto the same branch even if their task ids are close together.
+func TestBranchNameUsesIssueIdentifier(t *testing.T) {
+	t.Parallel()
+	taskID := "01a01ec0-e69d-7000-8000-000000000001"
+	a := fmt.Sprintf("agent/%s/%s", sanitizeName("Windows Codex"), issueBranchSegment("MUL-6063", taskID))
+	b := fmt.Sprintf("agent/%s/%s", sanitizeName("Windows Codex"), issueBranchSegment("MUL-6064", taskID))
+	if a == b {
+		t.Fatalf("both tasks resolved to branch %q", a)
+	}
+	if !strings.Contains(a, "mul-6063") || !strings.Contains(b, "mul-6064") {
+		t.Fatalf("issue identifiers missing from branches: %q / %q", a, b)
 	}
 }

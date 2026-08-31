@@ -63,14 +63,14 @@ func (d *Daemon) listenHealth() (net.Listener, error) {
 
 // repoCheckoutRequest is the body of a POST /repo/checkout request.
 type repoCheckoutRequest struct {
-	URL          string `json:"url"`
-	WorkspaceID  string `json:"workspace_id"`
-	WorkDir      string `json:"workdir"`
-	Ref          string `json:"ref,omitempty"`
-	AgentName    string `json:"agent_name"`
-	TaskID       string `json:"task_id"`
+	URL             string `json:"url"`
+	WorkspaceID     string `json:"workspace_id"`
+	WorkDir         string `json:"workdir"`
+	Ref             string `json:"ref,omitempty"`
+	AgentName       string `json:"agent_name"`
+	TaskID          string `json:"task_id"`
 	IssueIdentifier string `json:"issue_identifier,omitempty"`
-	CheckoutMode string `json:"checkout_mode,omitempty"`
+	CheckoutMode    string `json:"checkout_mode,omitempty"`
 }
 
 // healthHandler returns the /health HTTP handler. Extracted from serveHealth
