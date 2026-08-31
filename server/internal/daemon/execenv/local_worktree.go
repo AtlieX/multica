@@ -71,9 +71,13 @@ type LocalWorktreeParams struct {
 	// EnvRoot is the daemon-owned task env root. The worktree is created
 	// inside it so the ordinary env-root GC reclaims it.
 	EnvRoot string
-	// AgentName and TaskID name the branch: agent/<name>/<short-task-id>.
+	// AgentName, TaskID and IssueIdentifier name the branch:
+	// agent/<name>/<issue-key>-<short-task-id>.
 	AgentName string
 	TaskID    string
+	// IssueIdentifier, when present, names the issue this branch should be
+	// traceable to. The task id remains as a short disambiguating suffix.
+	IssueIdentifier string
 }
 
 // LocalWorktree is a prepared worktree plus everything the daemon needs to
@@ -214,7 +218,7 @@ func PrepareLocalWorktree(params LocalWorktreeParams, logger *slog.Logger) (*Loc
 			"so the worktree would not match what you have on disk: %w", gitRoot, stashErr)
 	}
 
-	branch := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), taskKey(params.TaskID))
+	branch := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), issueBranchSegment(params.IssueIdentifier, params.TaskID))
 	actualBranch, err := addLocalWorktree(gitRoot, worktreePath, branch, headSHA)
 	if err != nil {
 		return nil, err
@@ -675,9 +679,37 @@ func indexLockHint(gitRoot string) string {
 		" or a git command running in that repository)", lock)
 }
 
+// issueBranchSegment returns the branch segment used for a task branch. Issue
+// identifiers are the human-readable source of truth; the task id stays only
+// as a short disambiguating suffix, and non-issue tasks fall back to the short
+// task key.
+func issueBranchSegment(issueIdentifier, taskID string) string {
+	label := strings.ToLower(strings.TrimSpace(issueIdentifier))
+	label = nonAlphanumeric.ReplaceAllString(label, "-")
+	label = strings.Trim(label, "-")
+	if label == "" {
+		return taskKey(taskID)
+	}
+	suffix := strings.ToLower(taskKey(taskID))
+	if suffix == "" {
+		return label
+	}
+	maxPrefix := readablePathSegmentMax - len(suffix) - 1
+	if maxPrefix < 1 {
+		maxPrefix = 1
+	}
+	if len(label) > maxPrefix {
+		label = strings.TrimRight(label[:maxPrefix], "-")
+	}
+	if label == "" {
+		label = "issue"
+	}
+	return label + "-" + suffix
+}
+
 // addLocalWorktree creates the worktree, retrying once under a suffixed branch
-// name when the branch already exists (a re-dispatched task keeps its id, so
-// its branch can survive from the previous run).
+// name when the branch already exists (a re-dispatched task keeps its issue
+// identifier, so its branch can survive from the previous run).
 func addLocalWorktree(gitRoot, worktreePath, branch, baseRef string) (string, error) {
 	out, err := runGit(gitRoot, "worktree", "add", "-b", branch, worktreePath, baseRef)
 	if err != nil && strings.Contains(strings.ToLower(out), "already exists") {

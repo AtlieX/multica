@@ -7141,7 +7141,10 @@ func (d *Daemon) runTask(ctx context.Context, task Task, provider string, slot i
 			Task:                  taskCtx,
 		}
 		if localAssignment.UsesWorktree() {
-			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{LocalPath: localAssignment.AbsPath}
+			prepParams.LocalWorktree = &execenv.LocalWorktreeParams{
+				LocalPath:       localAssignment.AbsPath,
+				IssueIdentifier: taskCtx.IssueID,
+			}
 			// Take the per-path mutex for the snapshot alone, then hand it
 			// straight back — long enough to read a consistent tree, short
 			// enough that worktree tasks still overlap for the run itself.

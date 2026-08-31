@@ -6560,15 +6560,19 @@ func TestPredictRootDirDistinctForSharedUUIDv7Prefix(t *testing.T) {
 	}
 }
 
-// TestLocalWorktreeBranchDistinctForSharedUUIDv7Prefix covers the same
-// truncation in the branch name: two concurrent tasks for one agent would
-// otherwise both ask git for agent/<name>/<same-prefix>.
-func TestLocalWorktreeBranchDistinctForSharedUUIDv7Prefix(t *testing.T) {
+// TestLocalWorktreeBranchUsesIssueIdentifier pins the branch source of truth:
+// the issue key must be visible in the ref, and two different issues cannot
+// collapse onto the same branch even if their task ids are close together.
+func TestLocalWorktreeBranchUsesIssueIdentifier(t *testing.T) {
 	t.Parallel()
-	a := fmt.Sprintf("agent/%s/%s", sanitizeName("Reviewer"), taskKey("01a01ec0-e69d-7000-8000-000000000001"))
-	b := fmt.Sprintf("agent/%s/%s", sanitizeName("Reviewer"), taskKey("01a01ec0-f014-7000-8000-000000000002"))
+	taskID := "01a01ec0-e69d-7000-8000-000000000001"
+	a := fmt.Sprintf("agent/%s/%s", sanitizeName("Reviewer"), issueBranchSegment("MUL-6063", taskID))
+	b := fmt.Sprintf("agent/%s/%s", sanitizeName("Reviewer"), issueBranchSegment("MUL-6064", taskID))
 	if a == b {
 		t.Fatalf("both tasks resolved to branch %q", a)
+	}
+	if !strings.Contains(a, "mul-6063") || !strings.Contains(b, "mul-6064") {
+		t.Fatalf("issue identifiers missing from branches: %q / %q", a, b)
 	}
 }
 
