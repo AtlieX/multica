@@ -1254,7 +1254,13 @@ func (s *AutopilotService) shouldSkipDispatch(ctx context.Context, ap db.Autopil
 		if actorUserID.Valid {
 			return "you are not allowed to trigger this autopilot's assignee agent", dispatch.ReasonInvocationNotAllowed, true
 		}
-		return "autopilot creator lacks access to private assignee agent", dispatch.ReasonInvocationNotAllowed, true
+		// Report the side that actually failed. The previous fixed string
+		// always blamed a "private assignee agent", which is misleading when
+		// the agent is public_to and the creator is the problem.
+		if _, reason := s.creatorInvokeAgentReason(ctx, ap, agent); reason != "" {
+			return reason, dispatch.ReasonInvocationNotAllowed, true
+		}
+		return "autopilot creator cannot invoke the assignee agent", dispatch.ReasonInvocationNotAllowed, true
 	}
 	return "", "", false
 }
@@ -1821,42 +1827,66 @@ func (s *AutopilotService) canMemberInvokeAgent(ctx context.Context, agent db.Ag
 }
 
 func (s *AutopilotService) canCreatorInvokeAgent(ctx context.Context, ap db.Autopilot, agent db.Agent) bool {
+	ok, _ := s.creatorInvokeAgentReason(ctx, ap, agent)
+	return ok
+}
+
+// creatorInvokeAgentReason is canCreatorInvokeAgent plus the reason it denied.
+// The reason exists so the skip log can name the side that actually failed.
+// Historically every denial here was reported as "creator lacks access to
+// private assignee agent", which is wrong whenever the agent is public_to and
+// the real problem is the creator: an identity removed from workspace
+// membership orphans its autopilots, and they then skip silently and forever.
+// That exact case cost 11 days of undetected outage across every workspace on a
+// self-hosted instance, with investigations sent chasing agent visibility while
+// the agents were healthy the whole time.
+func (s *AutopilotService) creatorInvokeAgentReason(ctx context.Context, ap db.Autopilot, agent db.Agent) (bool, string) {
 	creatorID := util.UUIDToString(ap.CreatedByID)
 	if ap.CreatedByType == "member" && util.UUIDToString(agent.OwnerID) == creatorID {
-		return true
+		return true, ""
 	}
 	if agent.PermissionMode != "public_to" {
 		// private (or unknown mode): deny-by-default; only the owner branch
 		// above passes. Admins and agent-created autopilots do not bypass.
-		return false
+		return false, fmt.Sprintf("assignee agent %q is private and the autopilot creator (%s) does not own it", agent.Name, creatorID)
 	}
 	targets, err := s.Queries.ListAgentInvocationTargets(ctx, agent.ID)
 	if err != nil {
-		return false
+		return false, "could not load the assignee agent's invocation allow-list"
 	}
 	// Agent-created autopilots are workspace-internal principals: a workspace
 	// target admits them. Member creators must be workspace members.
 	workspaceBroad := ap.CreatedByType == "agent"
 	isWorkspaceMember := false
+	creatorLeftWorkspace := false
 	if ap.CreatedByType == "member" {
 		if _, err := s.Queries.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 			UserID:      ap.CreatedByID,
 			WorkspaceID: ap.WorkspaceID,
 		}); err == nil {
 			isWorkspaceMember = true
+		} else {
+			// The creator is no longer a member of this workspace. This is the
+			// orphaned-creator case and it is by far the most common cause of a
+			// silent, permanent skip, so name it explicitly rather than
+			// blaming the agent.
+			creatorLeftWorkspace = true
 		}
 	}
 	for _, t := range targets {
 		switch t.TargetType {
 		case "workspace":
 			if isWorkspaceMember || workspaceBroad {
-				return true
+				return true, ""
 			}
 		case "member":
 			if ap.CreatedByType == "member" && util.UUIDToString(t.TargetID) == creatorID {
-				return true
+				return true, ""
 			}
 		}
 	}
-	return false
+	if creatorLeftWorkspace {
+		return false, fmt.Sprintf("autopilot creator (%s) is no longer a member of this workspace, so the dispatch cannot be attributed; re-point the autopilot's creator at a current member", creatorID)
+	}
+	return false, fmt.Sprintf("autopilot creator (%s) is not on the assignee agent %q invocation allow-list", creatorID, agent.Name)
 }
