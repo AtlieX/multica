@@ -30,7 +30,7 @@
 # read it back with `docker compose port`, so the health check and the printed
 # URL always match what was actually published.
 
-name: multica
+name: "${COMPOSE_PROJECT_NAME:?refusing to start - COMPOSE_PROJECT_NAME is not set. The live stack sets it in .env under ~/Work/multica-docs-feature. From any other checkout use your own isolated project, e.g. docker compose -p mul-ISSUE ... , never the live one.}"
 
 services:
   postgres:
