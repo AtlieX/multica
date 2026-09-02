@@ -715,6 +715,22 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 	// the per-turn user message (daemon.BuildPrompt) instead. See MUL-5377.
 	writeHeader(&b)
 	writeBackgroundTaskSafetySlim(&b)
+
+	// Repositories is emitted BEFORE the agent identity block on purpose.
+	// writeAgentIdentity inlines ctx.AgentInstructions verbatim, and a
+	// long-lived agent accumulates instructions without bound (one DevOps
+	// agent reached 59k chars, 74% of an 80k brief). Providers that inject
+	// only a prefix of this file then truncate away everything after it,
+	// including the checkout imperative, which is the one instruction that
+	// must run FIRST in any code task. An agent that never sees it starts
+	// by hunting the filesystem for some other checkout and commits into
+	// the wrong repository. Keeping this section ahead of the agent block
+	// bounds its offset by the header alone, so it survives truncation no
+	// matter how large the agent's own instructions grow.
+	if kind != kindQuickCreate {
+		writeRepositories(&b, ctx)
+	}
+
 	writeAgentIdentity(&b, ctx)
 	writeRequestingUser(&b, ctx)
 	writeWorkspaceContext(&b, ctx)
@@ -729,10 +745,6 @@ func buildMetaSkillContentSlim(provider string, ctx TaskContextForEnv) string {
 
 	if kind == kindIssue {
 		writeCommentFormatting(&b)
-	}
-
-	if kind != kindQuickCreate {
-		writeRepositories(&b, ctx)
 	}
 
 	writeProjectContext(&b, ctx)
