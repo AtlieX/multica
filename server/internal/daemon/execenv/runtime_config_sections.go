@@ -68,6 +68,12 @@ func writeHeader(b *strings.Builder) {
 // auto-merge is not a wait and stays allowed — only waiting for it to
 // land is banned.
 //
+// MUL-592: the prior delivery-proof wording collided with the CI wait ban
+// in agent instructions, because it made CI look like a required proof step
+// instead of a non-blocking hand-off detail. The added sentence below keeps
+// the remote-branch plus PR-URL proof boundary while making clear that CI
+// status is outside delivery proof and does not justify waiting.
+//
 // MUL-5274 adds one narrow lifetime exception: a user-requested local
 // development/test service may be handed off after its readiness and cleanup
 // contract are complete. It is not a future result or wakeup. The brief keeps
@@ -97,6 +103,7 @@ func writeBackgroundTaskSafetySlim(b *strings.Builder) {
 	b.WriteString("- The persistent-service exception does not cover tests, builds, CI polling, monitors, or any other work whose completion the agent still owes; those remain run-owned, and the CI-specific rules below still apply.\n")
 	b.WriteString("- External systems triggered by a completed action — for example GitHub Actions after a successful push — are not agent-owned background tasks. Do not wait for them by default; report them as pending and finish the handoff.\n")
 	b.WriteString("- Concretely, after a push or a PR create, unless the explicit exception below applies: do NOT run `gh pr checks --watch`, `gh run watch`, or any sleep / retry loop that polls check status. Enabling auto-merge (`gh pr merge --auto`) is fine — it returns immediately; waiting for it to land is not. Take at most ONE non-blocking status snapshot (`gh pr checks <pr>` or `multica issue pull-requests <issue-id>`) and deliver the evidence you already have: \"Local tests pass (`go test ./...` / `pnpm test`); CI running: <PR link>\". A PR whose CI is still in flight is a complete hand-off.\n")
+	b.WriteString("- Your delivery proof is the branch resolving on the remote plus the PR URL; CI status is not part of it. A PR whose CI is still in flight is a complete hand-off, not a downgraded one. Closing on it is the expected outcome.\n")
 	b.WriteString("- A repo's merge requirements — \"CI must be green before merge\", required reviews, branch protection — are GitHub's merge gate, NOT your delivery acceptance criteria, and do not license a wait.\n")
 	b.WriteString("- The one exception: when the trigger comment or the issue's acceptance criteria explicitly ask you for the CI result, that result IS the deliverable — wait for it as ONE foreground blocking call (`gh pr checks <pr> --watch`) inside this same turn and report the outcome. Nothing else re-opens this door.\n")
 	b.WriteString("- Never end a turn with a \"standing by\" / \"I'll report back when X finishes\" message — that becomes your final output and the task ends.\n\n")

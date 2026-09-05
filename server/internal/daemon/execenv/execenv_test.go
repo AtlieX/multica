@@ -1020,6 +1020,8 @@ func TestInjectRuntimeConfigBackgroundTaskSafetyProviderAgnostic(t *testing.T) {
 				"any sleep / retry loop that polls check status",
 				"NOT your delivery acceptance criteria",
 				"CI running: <PR link>",
+				"branch resolving on the remote plus the PR URL",
+				"CI status is not part of it",
 				// The ban must stay scoped: an explicitly requested CI
 				// result is still reachable, and the section must name
 				// the one executable way to collect it. Without these

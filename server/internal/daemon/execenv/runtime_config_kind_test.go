@@ -260,6 +260,8 @@ func TestBackgroundTaskSafetySlimHardPins(t *testing.T) {
 		"any sleep / retry loop that polls check status",
 		"NOT your delivery acceptance criteria",
 		"CI running: <PR link>",
+		"branch resolving on the remote plus the PR URL",
+		"CI status is not part of it",
 		"unless the explicit exception below applies",
 		"The one exception",
 		"ONE foreground blocking call (`gh pr checks <pr> --watch`)",
