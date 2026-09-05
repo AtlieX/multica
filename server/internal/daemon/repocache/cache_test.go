@@ -580,6 +580,50 @@ func TestCreateWorktreeWithIsolatedGitMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeAdoptsExistingPlainClone(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	workDir := t.TempDir()
+	checkoutPath := filepath.Join(workDir, repoNameFromURL(sourceRepo))
+	if out, err := exec.Command("git", "clone", sourceRepo, checkoutPath).CombinedOutput(); err != nil {
+		t.Fatalf("seed plain clone: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:         "ws-1",
+		RepoURL:             sourceRepo,
+		WorkDir:             workDir,
+		AgentName:           "Linux Codex",
+		TaskID:              "33333333-3333-3333-3333-333333333333",
+		IsolatedGitMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if result.Path != checkoutPath {
+		t.Fatalf("checkout path = %q, want %q", result.Path, checkoutPath)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	baseRef := getRemoteDefaultBranch(barePath)
+	baseCommit := gitRefCommit(t, barePath, baseRef)
+
+	if got := gitHead(t, result.Path); got != baseCommit {
+		t.Fatalf("adopted checkout HEAD = %s, want %s", got, baseCommit)
+	}
+	if !isIsolatedCheckout(result.Path) {
+		t.Fatal("adopted plain clone was not marked as an isolated checkout")
+	}
+	if got := gitConfigGet(t, result.Path, isolatedCheckoutConfigKey); got != isolatedCheckoutConfigValue {
+		t.Fatalf("checkout-mode config = %q, want %q", got, isolatedCheckoutConfigValue)
+	}
+}
+
 func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
@@ -647,6 +691,39 @@ func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	wantHeads := "refs/heads/" + second.BranchName + "\nrefs/heads/" + userBranch
 	if got := strings.TrimSpace(string(heads)); got != wantHeads {
 		t.Fatalf("reused checkout local heads = %q, want %q", got, wantHeads)
+	}
+}
+
+func TestCreateWorktreeSupportsPullRequestShorthand(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	runGitAuthored(t, sourceRepo, "checkout", "-b", "pr-source")
+	addEmptyCommit(t, sourceRepo, "pull request head")
+	pullCommit := gitHead(t, sourceRepo)
+	runGitAuthored(t, sourceRepo, "update-ref", "refs/pull/408/head", pullCommit)
+
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		Ref:         "pr/408",
+		AgentName:   "tester",
+		TaskID:      "44444444-4444-4444-4444-444444444444",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if got := gitHead(t, result.Path); got != pullCommit {
+		t.Fatalf("checkout HEAD = %s, want pull request commit %s", got, pullCommit)
+	}
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	if got := gitRefCommit(t, barePath, "refs/remotes/origin/pull/408/head"); got != pullCommit {
+		t.Fatalf("cached PR ref = %s, want %s", got, pullCommit)
 	}
 }
 

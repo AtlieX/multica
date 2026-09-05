@@ -734,6 +734,24 @@ func (c *Cache) createOrUpdateIsolatedCheckout(barePath, repoURL, checkoutPath, 
 			return "", err
 		}
 	}
+	if isGitRepository(checkoutPath) {
+		if err := setIsolatedCheckoutOriginContext(ctx, checkoutPath, repoURL); err != nil {
+			return "", err
+		}
+		// Existing plain clones do not inherit the cache's promisor settings,
+		// so a blobless cache needs the checkout repaired before any detach or
+		// reset touches missing objects.
+		if isPartialCloneContext(ctx, barePath) {
+			if err := configurePromisorRemoteContext(ctx, checkoutPath); err != nil {
+				return "", err
+			}
+		}
+		if actualBranch, err := c.updateExistingIsolatedCheckoutContext(ctx, barePath, checkoutPath, branchName, baseRef, baseCommit); err != nil {
+			return "", err
+		} else {
+			return actualBranch, nil
+		}
+	}
 	if _, err := os.Stat(checkoutPath); err == nil {
 		return "", fmt.Errorf("checkout path already exists and is not a Multica isolated checkout: %s", checkoutPath)
 	} else if !os.IsNotExist(err) {
@@ -741,6 +759,32 @@ func (c *Cache) createOrUpdateIsolatedCheckout(barePath, repoURL, checkoutPath, 
 	}
 
 	return createIsolatedCheckout(barePath, repoURL, checkoutPath, branchName, baseRef, baseCommit)
+}
+
+func (c *Cache) updateExistingIsolatedCheckoutContext(ctx context.Context, barePath, checkoutPath, branchName, baseRef, baseCommit string) (string, error) {
+	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "reset", "--hard"); err != nil {
+		return "", fmt.Errorf("git reset --hard: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "clean", "-fd"); err != nil {
+		return "", fmt.Errorf("git clean -fd: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "checkout", "--detach", baseCommit); err != nil {
+		return "", fmt.Errorf("git checkout --detach: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	if err := deleteAllLocalBranchesContext(ctx, checkoutPath); err != nil {
+		return "", err
+	}
+	if err := syncIsolatedCheckoutRefsContext(ctx, barePath, checkoutPath, baseRef); err != nil {
+		return "", err
+	}
+	if out, err := runGitCombinedOutputContext(ctx, "-C", checkoutPath, "config", isolatedCheckoutConfigKey, isolatedCheckoutConfigValue); err != nil {
+		return "", fmt.Errorf("mark isolated checkout: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	actualBranch, err := checkoutNewBranchContext(ctx, checkoutPath, branchName, baseCommit)
+	if err != nil {
+		return "", err
+	}
+	return actualBranch, nil
 }
 
 func removeLinkedWorktree(barePath, checkoutPath string) error {
@@ -972,6 +1016,10 @@ func resolveBaseRef(barePath, requestedRef string) (string, error) {
 		return getRemoteDefaultBranch(barePath), nil
 	}
 
+	if pullRequestNumber, ok := parsePullRequestRef(ref); ok {
+		return fetchPullRequestRefContext(ctx, barePath, pullRequestNumber)
+	}
+
 	// Prefer remote-tracking branches for human branch names. Then allow full
 	// local refs, tags, and raw commits that exist in the fetched bare cache.
 	candidates := []string{
@@ -985,6 +1033,30 @@ func resolveBaseRef(barePath, requestedRef string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("cannot resolve requested ref %q in repo cache at %s", ref, barePath)
+}
+
+var pullRequestRefPattern = regexp.MustCompile(`^(?:pr|pull)/([0-9]+)$|^refs/pull/([0-9]+)/head$`)
+
+func parsePullRequestRef(ref string) (string, bool) {
+	match := pullRequestRefPattern.FindStringSubmatch(ref)
+	if match == nil {
+		return "", false
+	}
+	for _, group := range match[1:] {
+		if group != "" {
+			return group, true
+		}
+	}
+	return "", false
+}
+
+func fetchPullRequestRefContext(ctx context.Context, barePath, pullRequestNumber string) (string, error) {
+	localRef := "refs/remotes/origin/pull/" + pullRequestNumber + "/head"
+	spec := "refs/pull/" + pullRequestNumber + "/head:" + localRef
+	if out, err := runGitCombinedOutputContext(ctx, "-C", barePath, "fetch", "origin", spec); err != nil {
+		return "", fmt.Errorf("fetch pull request ref %q: %s: %w", "pr/"+pullRequestNumber, strings.TrimSpace(string(out)), err)
+	}
+	return localRef, nil
 }
 
 func gitRefExists(repoPath, ref string) bool {
@@ -1042,6 +1114,13 @@ func isBranchCollisionError(err error) bool {
 func isGitWorktree(path string) bool {
 	info, err := os.Stat(filepath.Join(path, ".git"))
 	return err == nil && !info.IsDir()
+}
+
+// isGitRepository checks whether path is any kind of Git checkout, including a
+// plain clone with a .git directory. Used to adopt a pre-existing clone that
+// an earlier step created before Multica could run repo checkout.
+func isGitRepository(path string) bool {
+	return runGitContext(context.Background(), "-C", path, "rev-parse", "--git-dir") == nil
 }
 
 // updateExistingWorktree resets the worktree to a clean state and checks out a
