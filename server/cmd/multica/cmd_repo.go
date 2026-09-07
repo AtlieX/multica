@@ -342,6 +342,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 	workspaceID := os.Getenv("MULTICA_WORKSPACE_ID")
 	agentName := os.Getenv("MULTICA_AGENT_NAME")
 	taskID := os.Getenv("MULTICA_TASK_ID")
+	issueIdentifier := strings.TrimSpace(os.Getenv("MULTICA_ISSUE_IDENTIFIER"))
 
 	// Use current working directory as the checkout target.
 	workDir, err := os.Getwd()
@@ -356,6 +357,7 @@ func runRepoCheckout(cmd *cobra.Command, args []string) error {
 		"ref":           repoCheckoutRef,
 		"agent_name":    agentName,
 		"task_id":       taskID,
+		"issue_identifier": issueIdentifier,
 		"checkout_mode": strings.TrimSpace(os.Getenv("MULTICA_REPO_CHECKOUT_MODE")),
 	}
 
