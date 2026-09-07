@@ -182,48 +182,6 @@ func repoNameFromURL(url string) string {
 	}
 	return name
 }
-// shortID returns the first 8 characters of a UUID string (dashes stripped).
-func shortID(uuid string) string {
-	s := strings.ReplaceAll(uuid, "-", "")
-	if len(s) > 8 {
-		return s[:8]
-	}
-	return s
-}
-
-const taskKeyLen = 12
-
-func taskKey(uuid string) string {
-	s := strings.ReplaceAll(uuid, "-", "")
-	if len(s) > taskKeyLen {
-		return s[len(s)-taskKeyLen:]
-	}
-	return s
-}
-
-func issueBranchSegment(issueIdentifier, taskID string) string {
-	label := strings.ToLower(strings.TrimSpace(issueIdentifier))
-	label = nonAlphanumeric.ReplaceAllString(label, "-")
-	label = strings.Trim(label, "-")
-	if label == "" {
-		return taskKey(taskID)
-	}
-	suffix := strings.ToLower(taskKey(taskID))
-	if suffix == "" {
-		return label
-	}
-	maxPrefix := 24 - len(suffix) - 1
-	if maxPrefix < 1 {
-		maxPrefix = 1
-	}
-	if len(label) > maxPrefix {
-		label = strings.TrimRight(label[:maxPrefix], "-")
-	}
-	if label == "" {
-		label = "issue"
-	}
-	return label + "-" + suffix
-}
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.

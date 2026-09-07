@@ -16,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
