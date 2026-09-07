@@ -1055,6 +1055,14 @@ func runGitAuthored(t *testing.T, repoPath string, args ...string) {
 	}
 }
 
+func setGitHooksPath(t *testing.T, repoPath, hooksPath string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repoPath, "config", "core.hooksPath", hooksPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("set core.hooksPath in %s to %s: %s: %v", repoPath, hooksPath, out, err)
+	}
+}
+
 // TestCreateWorktreeFetchesDespiteAgentBranchOnRemote reproduces the original
 // stale-cache bug. Under the legacy mirror refspec (+refs/heads/*:refs/heads/*)
 // the sequence below would break on the second CreateWorktree because `git
@@ -1443,6 +1451,9 @@ func TestCreateWorktreeInstallsCoAuthoredByHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
 		WorkspaceID:         "ws-1",
@@ -1486,6 +1497,9 @@ func TestCoAuthoredByHookIdempotent(t *testing.T) {
 	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
+
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
@@ -1537,6 +1551,9 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	// First worktree: setting enabled → hook installed in the bare cache's
 	// shared hooks dir.
 	workDir1 := t.TempDir()
@@ -1551,8 +1568,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 		t.Fatalf("CreateWorktree (enabled) failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hookPath := filepath.Join(barePath, "hooks", "prepare-commit-msg")
+	hookPath := filepath.Join(hooksDir, "prepare-commit-msg")
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Fatalf("precondition: expected hook to be installed at %s: %v", hookPath, err)
 	}
@@ -1610,6 +1626,9 @@ func TestCreateWorktreeRemovesLegacyCoAuthoredByHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	// Seed the bare cache with the exact hook content shipped by the
 	// previous daemon release (no multicaHookMarker line). Keeping a
 	// verbatim copy here means the test fails if recognition logic ever
@@ -1637,8 +1656,6 @@ fi
 git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 `
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hooksDir := filepath.Join(barePath, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
 	}
@@ -1693,8 +1710,8 @@ func TestRemoveCoAuthoredByHookPreservesUserHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hooksDir := filepath.Join(barePath, "hooks")
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
 	}

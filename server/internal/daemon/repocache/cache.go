@@ -4,6 +4,7 @@ package repocache
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -73,6 +74,11 @@ func newGitCommand(ctx context.Context, args ...string) *exec.Cmd {
 
 func runGitCombinedOutput(args ...string) ([]byte, error) {
 	return runGitCombinedOutputWithTimeout(repoCacheGitTimeout, args...)
+}
+
+func runGitCombinedOutputContext(ctx context.Context, args ...string) ([]byte, error) {
+	_ = ctx
+	return runGitCombinedOutput(args...)
 }
 
 func runGitCombinedOutputWithTimeout(timeout time.Duration, args ...string) ([]byte, error) {
@@ -735,18 +741,18 @@ func (c *Cache) createOrUpdateIsolatedCheckout(barePath, repoURL, checkoutPath, 
 		}
 	}
 	if isGitRepository(checkoutPath) {
-		if err := setIsolatedCheckoutOriginContext(ctx, checkoutPath, repoURL); err != nil {
+		if err := setIsolatedCheckoutOriginContext(context.Background(), checkoutPath, repoURL); err != nil {
 			return "", err
 		}
 		// Existing plain clones do not inherit the cache's promisor settings,
 		// so a blobless cache needs the checkout repaired before any detach or
 		// reset touches missing objects.
-		if isPartialCloneContext(ctx, barePath) {
-			if err := configurePromisorRemoteContext(ctx, checkoutPath); err != nil {
+		if isPartialCloneContext(context.Background(), barePath) {
+			if err := configurePromisorRemoteContext(context.Background(), checkoutPath); err != nil {
 				return "", err
 			}
 		}
-		if actualBranch, err := c.updateExistingIsolatedCheckoutContext(ctx, barePath, checkoutPath, branchName, baseRef, baseCommit); err != nil {
+		if actualBranch, err := c.updateExistingIsolatedCheckoutContext(context.Background(), barePath, checkoutPath, branchName, baseRef, baseCommit); err != nil {
 			return "", err
 		} else {
 			return actualBranch, nil
@@ -918,6 +924,11 @@ func isPartialClone(repoPath string) bool {
 	return strings.TrimSpace(string(out)) == "true"
 }
 
+func isPartialCloneContext(ctx context.Context, repoPath string) bool {
+	_ = ctx
+	return isPartialClone(repoPath)
+}
+
 // configurePromisorRemote marks origin as the promisor remote for a repository
 // whose object store is incomplete, so git lazily fetches missing blobs from
 // the real remote instead of failing. It mirrors the two config keys
@@ -936,12 +947,22 @@ func configurePromisorRemote(repoPath string) error {
 	return nil
 }
 
+func configurePromisorRemoteContext(ctx context.Context, repoPath string) error {
+	_ = ctx
+	return configurePromisorRemote(repoPath)
+}
+
 func setIsolatedCheckoutOrigin(path, repoURL string) error {
 	out, err := runGitCombinedOutput("-C", path, "remote", "set-url", "origin", repoURL)
 	if err != nil {
 		return fmt.Errorf("set origin remote: %s: %w", strings.TrimSpace(string(out)), err)
 	}
 	return nil
+}
+
+func setIsolatedCheckoutOriginContext(ctx context.Context, path, repoURL string) error {
+	_ = ctx
+	return setIsolatedCheckoutOrigin(path, repoURL)
 }
 
 // syncIsolatedCheckoutRefs mirrors the cache's real origin/* and tag refs into
@@ -964,11 +985,21 @@ func syncIsolatedCheckoutRefs(barePath, checkoutPath, baseRef string) error {
 	return nil
 }
 
+func syncIsolatedCheckoutRefsContext(ctx context.Context, barePath, checkoutPath, baseRef string) error {
+	_ = ctx
+	return syncIsolatedCheckoutRefs(barePath, checkoutPath, baseRef)
+}
+
 // deleteAllLocalBranches removes the heads copied from the bare cache into a
 // fresh local clone. The clone is detached and has no task-created branches to
 // preserve yet.
 func deleteAllLocalBranches(repoPath string) error {
 	return deleteLocalBranchesUnder(repoPath, "refs/heads/", "")
+}
+
+func deleteAllLocalBranchesContext(ctx context.Context, repoPath string) error {
+	_ = ctx
+	return deleteAllLocalBranches(repoPath)
 }
 
 // deleteStaleAgentBranches prunes branches left by earlier Multica tasks while
@@ -1010,6 +1041,11 @@ func checkoutNewBranch(repoPath, branchName, baseRef string) (string, error) {
 	return branchName, nil
 }
 
+func checkoutNewBranchContext(ctx context.Context, repoPath, branchName, baseRef string) (string, error) {
+	_ = ctx
+	return checkoutNewBranch(repoPath, branchName, baseRef)
+}
+
 func resolveBaseRef(barePath, requestedRef string) (string, error) {
 	ref := strings.TrimSpace(requestedRef)
 	if ref == "" {
@@ -1017,7 +1053,7 @@ func resolveBaseRef(barePath, requestedRef string) (string, error) {
 	}
 
 	if pullRequestNumber, ok := parsePullRequestRef(ref); ok {
-		return fetchPullRequestRefContext(ctx, barePath, pullRequestNumber)
+		return fetchPullRequestRefContext(context.Background(), barePath, pullRequestNumber)
 	}
 
 	// Prefer remote-tracking branches for human branch names. Then allow full
@@ -1120,7 +1156,7 @@ func isGitWorktree(path string) bool {
 // plain clone with a .git directory. Used to adopt a pre-existing clone that
 // an earlier step created before Multica could run repo checkout.
 func isGitRepository(path string) bool {
-	return runGitContext(context.Background(), "-C", path, "rev-parse", "--git-dir") == nil
+	return runGit("-C", path, "rev-parse", "--git-dir") == nil
 }
 
 // updateExistingWorktree resets the worktree to a clean state and checks out a
@@ -1326,16 +1362,10 @@ git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 // git common directory (the bare repo for worktrees) so it applies to all
 // worktrees created from this cache.
 func installCoAuthoredByHook(worktreePath string) error {
-	out, err := runGitOutput("-C", worktreePath, "rev-parse", "--git-common-dir")
+	hooksDir, err := resolveHookDir(worktreePath)
 	if err != nil {
-		return fmt.Errorf("resolve git common dir: %w", err)
+		return err
 	}
-	commonDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(worktreePath, commonDir)
-	}
-
-	hooksDir := filepath.Join(commonDir, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return fmt.Errorf("create hooks dir: %w", err)
 	}
@@ -1345,6 +1375,35 @@ func installCoAuthoredByHook(worktreePath string) error {
 		return fmt.Errorf("write prepare-commit-msg hook: %w", err)
 	}
 	return nil
+}
+
+func resolveHookDir(worktreePath string) (string, error) {
+	out, err := runGitOutput("-C", worktreePath, "rev-parse", "--git-common-dir")
+	if err != nil {
+		return "", fmt.Errorf("resolve git common dir: %w", err)
+	}
+	commonDir := strings.TrimSpace(string(out))
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(worktreePath, commonDir)
+	}
+
+	out, err = runGitOutput("-C", worktreePath, "config", "--get", "core.hooksPath")
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", fmt.Errorf("resolve core.hooksPath: %w", err)
+		}
+		return filepath.Join(commonDir, "hooks"), nil
+	}
+
+	hooksPath := strings.TrimSpace(string(out))
+	if hooksPath == "" {
+		return filepath.Join(commonDir, "hooks"), nil
+	}
+	if filepath.IsAbs(hooksPath) {
+		return hooksPath, nil
+	}
+	return filepath.Join(commonDir, hooksPath), nil
 }
 
 // isDaemonInstalledHook reports whether a prepare-commit-msg hook on disk was
@@ -1368,16 +1427,12 @@ func isDaemonInstalledHook(contents []byte) bool {
 // Returns nil when no hook is present or when an unrelated hook occupies
 // the path.
 func removeCoAuthoredByHook(worktreePath string) error {
-	out, err := runGitOutput("-C", worktreePath, "rev-parse", "--git-common-dir")
+	hooksDir, err := resolveHookDir(worktreePath)
 	if err != nil {
-		return fmt.Errorf("resolve git common dir: %w", err)
-	}
-	commonDir := strings.TrimSpace(string(out))
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(worktreePath, commonDir)
+		return err
 	}
 
-	hookPath := filepath.Join(commonDir, "hooks", "prepare-commit-msg")
+	hookPath := filepath.Join(hooksDir, "prepare-commit-msg")
 	contents, err := os.ReadFile(hookPath)
 	if err != nil {
 		if os.IsNotExist(err) {
