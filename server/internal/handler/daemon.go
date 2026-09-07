@@ -1636,6 +1636,11 @@ type claimBuildFailure struct {
 func (h *Handler) buildClaimedTaskResponse(r *http.Request, task *db.AgentTaskQueue, runtime db.AgentRuntime, runtimeID, runtimeWorkspaceID string) (resp AgentTaskResponse, deliveredCommentIDs []pgtype.UUID, agentSkillCount, builtinSkillCount int, failure *claimBuildFailure) {
 	// Build response with fresh agent data (name + skills + custom_env + custom_args).
 	resp = taskToResponse(*task, runtimeWorkspaceID)
+	if issue, err := h.Queries.GetIssue(r.Context(), task.IssueID); err == nil {
+		if ws, werr := h.Queries.GetWorkspace(r.Context(), issue.WorkspaceID); werr == nil {
+			resp.IssueIdentifier = ws.IssuePrefix + "-" + strconv.Itoa(int(issue.Number))
+		}
+	}
 	supportsCoalescedComments := requestHasClientCapability(r, protocol.DaemonCapabilityCoalescedCommentsV1)
 	// Empty-but-non-nil so pgx persists '{}' rather than NULL for tasks without
 	// comment input. Comment tasks replace this with the ids actually embedded

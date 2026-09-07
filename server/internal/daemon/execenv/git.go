@@ -110,7 +110,7 @@ func removeGitWorktree(gitRoot, worktreePath, branchName string, logger *slog.Lo
 	// Delete the branch (best-effort).
 	if branchName != "" {
 		cmd = exec.Command("git", "-C", gitRoot, "branch", "-D", branchName)
-	
+
 		if out, err := cmd.CombinedOutput(); err != nil {
 			logger.Warn("execenv: git branch delete failed", "branch", branchName, "output", strings.TrimSpace(string(out)), "error", err)
 		}
@@ -182,7 +182,6 @@ func repoNameFromURL(url string) string {
 	}
 	return name
 }
-
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
 
 // sanitizeName produces a git-branch-safe name from a human-readable string.

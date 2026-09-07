@@ -21,6 +21,16 @@ type RepoContextForEnv struct {
 	Ref         string // optional default checkout ref for this task
 }
 
+// RootDirParams preserves the older PredictRootDir call shape used by some
+// tests while keeping the current string-based helper available.
+type RootDirParams struct {
+	WorkspacesRoot  string
+	WorkspaceID     string
+	WorkspaceSlug   string
+	TaskID          string
+	IssueIdentifier string
+}
+
 // ProjectResourceForEnv describes a single resource attached to the issue's
 // project. The resource_ref payload is type-specific JSON; the agent reads
 // resources.json on disk for the full structure. This struct only carries
@@ -35,10 +45,12 @@ type ProjectResourceForEnv struct {
 
 // PrepareParams holds all inputs needed to set up an execution environment.
 type PrepareParams struct {
-	WorkspacesRoot string // base path for all envs (e.g., ~/multica_workspaces)
-	WorkspaceID    string // workspace UUID — tasks are grouped under this
-	TaskID         string // task UUID — used for directory name
-	AgentName      string // for git branch naming only
+	WorkspacesRoot  string // base path for all envs (e.g., ~/multica_workspaces)
+	WorkspaceID     string // workspace UUID — tasks are grouped under this
+	TaskID          string // task UUID — used for directory name
+	AgentName       string // for git branch naming only
+	WorkspaceSlug   string
+	IssueIdentifier string
 	// Profile is the daemon's profile name (empty = default). It namespaces the
 	// per-issue Codex session store so a second profile-daemon sharing the same
 	// ~/.codex cannot see or GC this daemon's stores (MUL-4424).
@@ -92,6 +104,7 @@ type PrepareParams struct {
 // TaskContextForEnv is the subset of task context used for writing context files.
 type TaskContextForEnv struct {
 	IssueID          string
+	IssueIdentifier  string
 	TriggerCommentID string // comment that triggered this task (empty for on_assign)
 	TriggerThreadID  string // root comment ID for the triggering thread; falls back to TriggerCommentID when empty
 	// CommentReplyTargets is set for a comment run that coalesced comments
@@ -238,7 +251,32 @@ type Environment struct {
 // PredictRootDir returns the env root path that Prepare would create for the
 // given task, without performing any I/O. Callers use this to claim ownership
 // of the directory (e.g. against the GC loop) before Prepare/Reuse runs.
-func PredictRootDir(workspacesRoot, workspaceID, taskID string) string {
+//
+// Current callers pass the three string arguments. Compatibility tests still
+// use a RootDirParams struct; both forms are accepted.
+func PredictRootDir(args ...any) string {
+	var workspacesRoot, workspaceID, taskID string
+	switch len(args) {
+	case 1:
+		switch p := args[0].(type) {
+		case RootDirParams:
+			workspacesRoot, workspaceID, taskID = p.WorkspacesRoot, p.WorkspaceID, p.TaskID
+		case *RootDirParams:
+			if p != nil {
+				workspacesRoot, workspaceID, taskID = p.WorkspacesRoot, p.WorkspaceID, p.TaskID
+			}
+		}
+	case 3:
+		if s, ok := args[0].(string); ok {
+			workspacesRoot = s
+		}
+		if s, ok := args[1].(string); ok {
+			workspaceID = s
+		}
+		if s, ok := args[2].(string); ok {
+			taskID = s
+		}
+	}
 	if workspacesRoot == "" || workspaceID == "" || taskID == "" {
 		return ""
 	}
