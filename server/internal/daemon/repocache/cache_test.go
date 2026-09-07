@@ -580,6 +580,50 @@ func TestCreateWorktreeWithIsolatedGitMetadata(t *testing.T) {
 	}
 }
 
+func TestCreateWorktreeAdoptsExistingPlainClone(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	workDir := t.TempDir()
+	checkoutPath := filepath.Join(workDir, repoNameFromURL(sourceRepo))
+	if out, err := exec.Command("git", "clone", sourceRepo, checkoutPath).CombinedOutput(); err != nil {
+		t.Fatalf("seed plain clone: %s: %v", strings.TrimSpace(string(out)), err)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID:         "ws-1",
+		RepoURL:             sourceRepo,
+		WorkDir:             workDir,
+		AgentName:           "Linux Codex",
+		TaskID:              "33333333-3333-3333-3333-333333333333",
+		IsolatedGitMetadata: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if result.Path != checkoutPath {
+		t.Fatalf("checkout path = %q, want %q", result.Path, checkoutPath)
+	}
+
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	baseRef := getRemoteDefaultBranch(barePath)
+	baseCommit := gitRefCommit(t, barePath, baseRef)
+
+	if got := gitHead(t, result.Path); got != baseCommit {
+		t.Fatalf("adopted checkout HEAD = %s, want %s", got, baseCommit)
+	}
+	if !isIsolatedCheckout(result.Path) {
+		t.Fatal("adopted plain clone was not marked as an isolated checkout")
+	}
+	if got := gitConfigGet(t, result.Path, isolatedCheckoutConfigKey); got != isolatedCheckoutConfigValue {
+		t.Fatalf("checkout-mode config = %q, want %q", got, isolatedCheckoutConfigValue)
+	}
+}
+
 func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	t.Parallel()
 	sourceRepo := createTestRepo(t)
@@ -647,6 +691,39 @@ func TestCreateWorktreeReusesIsolatedGitMetadata(t *testing.T) {
 	wantHeads := "refs/heads/" + second.BranchName + "\nrefs/heads/" + userBranch
 	if got := strings.TrimSpace(string(heads)); got != wantHeads {
 		t.Fatalf("reused checkout local heads = %q, want %q", got, wantHeads)
+	}
+}
+
+func TestCreateWorktreeSupportsPullRequestShorthand(t *testing.T) {
+	t.Parallel()
+	sourceRepo := createTestRepo(t)
+	runGitAuthored(t, sourceRepo, "checkout", "-b", "pr-source")
+	addEmptyCommit(t, sourceRepo, "pull request head")
+	pullCommit := gitHead(t, sourceRepo)
+	runGitAuthored(t, sourceRepo, "update-ref", "refs/pull/408/head", pullCommit)
+
+	cache := New(t.TempDir(), testLogger())
+	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
+		t.Fatalf("sync failed: %v", err)
+	}
+
+	result, err := cache.CreateWorktree(WorktreeParams{
+		WorkspaceID: "ws-1",
+		RepoURL:     sourceRepo,
+		WorkDir:     t.TempDir(),
+		Ref:         "pr/408",
+		AgentName:   "tester",
+		TaskID:      "44444444-4444-4444-4444-444444444444",
+	})
+	if err != nil {
+		t.Fatalf("CreateWorktree failed: %v", err)
+	}
+	if got := gitHead(t, result.Path); got != pullCommit {
+		t.Fatalf("checkout HEAD = %s, want pull request commit %s", got, pullCommit)
+	}
+	barePath := cache.Lookup("ws-1", sourceRepo)
+	if got := gitRefCommit(t, barePath, "refs/remotes/origin/pull/408/head"); got != pullCommit {
+		t.Fatalf("cached PR ref = %s, want %s", got, pullCommit)
 	}
 }
 
@@ -975,6 +1052,14 @@ func runGitAuthored(t *testing.T, repoPath string, args ...string) {
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v in %s: %s: %v", args, repoPath, out, err)
+	}
+}
+
+func setGitHooksPath(t *testing.T, repoPath, hooksPath string) {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repoPath, "config", "core.hooksPath", hooksPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("set core.hooksPath in %s to %s: %s: %v", repoPath, hooksPath, out, err)
 	}
 }
 
@@ -1366,6 +1451,9 @@ func TestCreateWorktreeInstallsCoAuthoredByHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
 		WorkspaceID:         "ws-1",
@@ -1409,6 +1497,9 @@ func TestCoAuthoredByHookIdempotent(t *testing.T) {
 	if err := cache.Sync("ws-1", []RepoInfo{{URL: sourceRepo}}); err != nil {
 		t.Fatalf("sync failed: %v", err)
 	}
+
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
 
 	workDir := t.TempDir()
 	result, err := cache.CreateWorktree(WorktreeParams{
@@ -1460,6 +1551,9 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	// First worktree: setting enabled → hook installed in the bare cache's
 	// shared hooks dir.
 	workDir1 := t.TempDir()
@@ -1474,8 +1568,7 @@ func TestCreateWorktreeRemovesCoAuthoredByHookWhenDisabled(t *testing.T) {
 		t.Fatalf("CreateWorktree (enabled) failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hookPath := filepath.Join(barePath, "hooks", "prepare-commit-msg")
+	hookPath := filepath.Join(hooksDir, "prepare-commit-msg")
 	if _, err := os.Stat(hookPath); err != nil {
 		t.Fatalf("precondition: expected hook to be installed at %s: %v", hookPath, err)
 	}
@@ -1533,6 +1626,9 @@ func TestCreateWorktreeRemovesLegacyCoAuthoredByHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
+
 	// Seed the bare cache with the exact hook content shipped by the
 	// previous daemon release (no multicaHookMarker line). Keeping a
 	// verbatim copy here means the test fails if recognition logic ever
@@ -1560,8 +1656,6 @@ fi
 git interpret-trailers --in-place --trailer "$TRAILER" "$COMMIT_MSG_FILE"
 `
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hooksDir := filepath.Join(barePath, "hooks")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
 	}
@@ -1616,8 +1710,8 @@ func TestRemoveCoAuthoredByHookPreservesUserHook(t *testing.T) {
 		t.Fatalf("sync failed: %v", err)
 	}
 
-	barePath := cache.Lookup("ws-1", sourceRepo)
-	hooksDir := filepath.Join(barePath, "hooks")
+	hooksDir := t.TempDir()
+	setGitHooksPath(t, cache.Lookup("ws-1", sourceRepo), hooksDir)
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		t.Fatalf("create hooks dir: %v", err)
 	}
