@@ -69,6 +69,7 @@ type repoCheckoutRequest struct {
 	Ref          string `json:"ref,omitempty"`
 	AgentName    string `json:"agent_name"`
 	TaskID       string `json:"task_id"`
+	IssueIdentifier string `json:"issue_identifier,omitempty"`
 	CheckoutMode string `json:"checkout_mode,omitempty"`
 }
 
@@ -222,6 +223,7 @@ func (d *Daemon) repoCheckoutHandler() http.HandlerFunc {
 			Ref:                 checkoutRef,
 			AgentName:           req.AgentName,
 			TaskID:              req.TaskID,
+			IssueIdentifier:     strings.TrimSpace(req.IssueIdentifier),
 			CoAuthoredByEnabled: d.workspaceCoAuthoredByEnabled(req.WorkspaceID),
 			IsolatedGitMetadata: req.CheckoutMode == repoCheckoutModeIsolated,
 		})

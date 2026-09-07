@@ -61,6 +61,7 @@ type Task struct {
 	AgentID     string `json:"agent_id"`
 	RuntimeID   string `json:"runtime_id"`
 	IssueID     string `json:"issue_id"`
+	IssueIdentifier string `json:"issue_identifier,omitempty"`
 	WorkspaceID string `json:"workspace_id"`
 	// WorkspaceContext mirrors workspace.context (the per-workspace system
 	// prompt set in Settings → General). Server populates this on every claim

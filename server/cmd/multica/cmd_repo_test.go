@@ -210,6 +210,7 @@ func TestRunRepoCheckoutForwardsManagedCheckoutMode(t *testing.T) {
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
 	t.Setenv("MULTICA_AGENT_NAME", "Test Agent")
 	t.Setenv("MULTICA_TASK_ID", "task-1")
+	t.Setenv("MULTICA_ISSUE_IDENTIFIER", "MUL-123")
 	t.Setenv("MULTICA_REPO_CHECKOUT_MODE", "isolated")
 
 	previousRef := repoCheckoutRef
@@ -224,5 +225,8 @@ func TestRunRepoCheckoutForwardsManagedCheckoutMode(t *testing.T) {
 	}
 	if got := body["ref"]; got != "release/v2" {
 		t.Fatalf("ref = %q, want release/v2", got)
+	}
+	if got := body["issue_identifier"]; got != "MUL-123" {
+		t.Fatalf("issue_identifier = %q, want MUL-123", got)
 	}
 }

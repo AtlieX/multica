@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
@@ -490,6 +492,7 @@ type WorktreeParams struct {
 	Ref                 string // optional branch, tag, or commit to base the worktree on
 	AgentName           string // for branch naming
 	TaskID              string // for branch naming uniqueness
+	IssueIdentifier     string // human-readable issue key, when the task has one
 	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
 	// IsolatedGitMetadata creates a local clone whose .git directory lives
 	// inside WorkDir instead of a linked worktree whose gitdir lives under the
@@ -564,8 +567,8 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name: agent/{sanitized-name}/{short-task-id}
-	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), shortID(params.TaskID))
+	// Build branch name from the human-readable issue key when present.
+	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), execenv.IssueBranchSegment(params.IssueIdentifier, params.TaskID))
 
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
