@@ -16,8 +16,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/multica-ai/multica/server/internal/daemon/execenv"
 )
 
 // gitEnv returns an environment for git subprocesses that contact remotes.
@@ -66,6 +64,7 @@ var agentGitExcludePatterns = []string{
 }
 
 const repoCacheGitTimeout = 10 * time.Minute
+const branchNameSegmentMax = 24
 
 func newGitCommand(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -492,7 +491,7 @@ type WorktreeParams struct {
 	Ref                 string // optional branch, tag, or commit to base the worktree on
 	AgentName           string // for branch naming
 	TaskID              string // for branch naming uniqueness
-	IssueIdentifier     string // human-readable issue key, when the task has one
+	IssueIdentifier     string // issue key used to keep reused task branches stable
 	CoAuthoredByEnabled bool   // install prepare-commit-msg hook for Co-authored-by trailer
 	// IsolatedGitMetadata creates a local clone whose .git directory lives
 	// inside WorkDir instead of a linked worktree whose gitdir lives under the
@@ -567,8 +566,8 @@ func (c *Cache) CreateWorktree(params WorktreeParams) (*WorktreeResult, error) {
 		return nil, fmt.Errorf("cannot resolve default branch for %s: bare cache at %s has no usable refs (origin/* is empty or ambiguous and bare HEAD has no match). The cache may be corrupted; delete it and retry", params.RepoURL, barePath)
 	}
 
-	// Build branch name from the human-readable issue key when present.
-	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), execenv.IssueBranchSegment(params.IssueIdentifier, params.TaskID))
+	// Build branch name: agent/{sanitized-name}/{issue-id}-{task-suffix}
+	branchName := fmt.Sprintf("agent/%s/%s", sanitizeName(params.AgentName), issueBranchSegment(params.IssueIdentifier, params.TaskID))
 
 	// Derive directory name from repo URL.
 	dirName := repoNameFromURL(params.RepoURL)
@@ -1377,6 +1376,9 @@ func installCoAuthoredByHook(worktreePath string) error {
 	if err := os.WriteFile(hookPath, []byte(prepareCommitMsgHook), 0o755); err != nil {
 		return fmt.Errorf("write prepare-commit-msg hook: %w", err)
 	}
+	if out, err := runGitCombinedOutput("-C", worktreePath, "config", "core.hooksPath", hooksDir); err != nil {
+		return fmt.Errorf("set core.hooksPath to %s: %s: %w", hooksDir, strings.TrimSpace(string(out)), err)
+	}
 	return nil
 }
 
@@ -1524,6 +1526,52 @@ func sanitizeName(name string) string {
 	}
 	if s == "" {
 		s = "agent"
+	}
+	return s
+}
+
+// issueBranchSegment returns the branch segment used for a task branch. Issue
+// identifiers are the human-readable source of truth; the task id remains only
+// as a short disambiguating suffix, and non-issue tasks fall back to the short
+// task key.
+func issueBranchSegment(issueIdentifier, taskID string) string {
+	label := strings.ToLower(strings.TrimSpace(issueIdentifier))
+	label = nonAlphanumeric.ReplaceAllString(label, "-")
+	label = strings.Trim(label, "-")
+	if label == "" {
+		return taskKey(taskID)
+	}
+	suffix := strings.ToLower(taskKey(taskID))
+	if suffix == "" {
+		return label
+	}
+	maxPrefix := branchNameSegmentMax - len(suffix) - 1
+	if maxPrefix < 1 {
+		maxPrefix = 1
+	}
+	if len(label) > maxPrefix {
+		label = strings.TrimRight(label[:maxPrefix], "-")
+	}
+	if label == "" {
+		label = "issue"
+	}
+	return label + "-" + suffix
+}
+
+// taskKeyLen mirrors execenv.taskKeyLen — see that constant for why the
+// segment is short: a branch name becomes a path under .git/refs/heads/ inside
+// the task checkout, and Windows enforces MAX_PATH there.
+const taskKeyLen = 12
+
+// taskKey returns the git-safe branch segment identifying a task: the LAST
+// taskKeyLen hex chars of the id. Mirrors execenv.taskKey — a UUIDv7's LEADING
+// 8 hex chars are timestamp bits that only advance every ~65.5s, so taking the
+// front gave two concurrently created tasks the same branch name (#7326). The
+// tail is random.
+func taskKey(uuid string) string {
+	s := strings.ReplaceAll(uuid, "-", "")
+	if len(s) > taskKeyLen {
+		return s[len(s)-taskKeyLen:]
 	}
 	return s
 }

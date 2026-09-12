@@ -402,6 +402,31 @@ func daemonTaskContextMarkerPath() string {
 	}
 }
 
+func daemonTaskIssueIdentifier() string {
+	dir, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		markerPath := filepath.Join(dir, execenv.TaskContextMarkerRelPath)
+		if data, err := os.ReadFile(markerPath); err == nil {
+			var marker struct {
+				ManagedBy       string `json:"managed_by"`
+				IssueIdentifier string `json:"issue_identifier,omitempty"`
+			}
+			if json.Unmarshal(data, &marker) == nil && marker.ManagedBy == execenv.TaskContextMarkerManagedBy {
+				return strings.TrimSpace(marker.IssueIdentifier)
+			}
+		}
+
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
 func resolveWorkspaceID(cmd *cobra.Command) string {
 	val := cli.FlagOrEnv(cmd, "workspace-id", "MULTICA_WORKSPACE_ID", "")
 	if val != "" {
