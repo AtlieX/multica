@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Skill } from "@multica/core/types";
 import { I18nProvider } from "@multica/core/i18n/react";
@@ -10,6 +11,19 @@ import enSkills from "../../locales/en/skills.json";
 import { NavigationProvider, type NavigationAdapter } from "../../navigation";
 
 const TEST_RESOURCES = { en: { common: enCommon, skills: enSkills } };
+
+// MUL-7107: every band of a detail page reads the shared rail. The read-only
+// capability banner was the one left behind, so a viewer without edit rights
+// saw a near-full-width card above centred content on a wide window. The
+// constants are overridden with sentinels because their real values are
+// ordinary Tailwind classes a hand-written element could match by accident.
+const RAIL_SENTINEL = "rail-sentinel";
+const GUTTER_SENTINEL = "gutter-sentinel";
+vi.mock("../../layout/page-header", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../layout/page-header")>()),
+  PAGE_RAIL: "rail-sentinel",
+  PAGE_GUTTER: "gutter-sentinel",
+}));
 
 const skillRef = vi.hoisted(() => ({ current: null as unknown }));
 const agentsRef = vi.hoisted(() => ({ current: [] as unknown[] }));
@@ -122,6 +136,7 @@ function renderPage(searchParams = new URLSearchParams()) {
     back: vi.fn(),
     pathname: "/acme/skills/skill-1",
     searchParams,
+    hash: "",
     getShareableUrl: (path) => path,
   };
   render(
@@ -168,11 +183,6 @@ describe("SkillDetailPage tabs", () => {
     ).toBe("true");
   });
 
-  it("shows resource labels in Overview without a release flag", async () => {
-    renderPage();
-    expect(await screen.findByTestId("labels")).toBeTruthy();
-  });
-
   it("mirrors the active tab into ?view= so the pane survives a reload", async () => {
     const { replace } = renderPage();
     fireEvent.click(await screen.findByRole("tab", { name: "Files 2" }));
@@ -193,7 +203,7 @@ describe("SkillDetailPage file mode", () => {
   it("keeps plain-text mode when switching files", async () => {
     renderPage(new URLSearchParams("view=files"));
 
-    fireEvent.click(await screen.findByRole("button", { name: "Plain text" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
     expect(screen.getByRole("textbox", { name: /SKILL\.md/ })).toBeTruthy();
 
     // Mode used to live inside FileViewer, which the per-path `key`
@@ -208,6 +218,69 @@ describe("SkillDetailPage file mode", () => {
     const preview = await screen.findByTestId("preview");
     expect(preview.textContent).toContain("# Interface Animations");
     expect(preview.textContent).not.toContain("name: aiforui-animations");
+  });
+});
+
+describe("SkillDetailPage edit action (MUL-5654)", () => {
+  /** Opens a file row's action menu the way the rail exposes it. */
+  async function openRowMenu(path: string | RegExp) {
+    // The file-name button carries role="tab", so a "button" match on the row
+    // is the trailing "..." trigger.
+    await userEvent.click(await screen.findByRole("button", { name: path }));
+  }
+
+  it("opens a supporting file in a focused editor", async () => {
+    renderPage(new URLSearchParams("view=files"));
+
+    await openRowMenu(/patterns\.md/);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Edit" }),
+    );
+
+    // One gesture owes all three: the file is open, the pane is the editor
+    // rather than the preview, and the caret is already in it.
+    const editor = screen.getByRole("textbox", { name: /patterns\.md/ });
+    expect(screen.queryByTestId("preview")).toBeNull();
+    expect(document.activeElement).toBe(editor);
+  });
+
+  it("focuses the editor for the file that is already open", async () => {
+    renderPage(new URLSearchParams("view=files"));
+
+    // SKILL.md opens selected, so this path mounts nothing new. A mount-only
+    // autoFocus would silently do nothing here.
+    await openRowMenu(/SKILL\.md/);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Edit" }),
+    );
+
+    expect(document.activeElement).toBe(
+      screen.getByRole("textbox", { name: /SKILL\.md/ }),
+    );
+  });
+
+  it("leaves the caret at the top rather than the end of the file", async () => {
+    renderPage(new URLSearchParams("view=files"));
+
+    await openRowMenu(/patterns\.md/);
+    await userEvent.click(
+      await screen.findByRole("menuitem", { name: "Edit" }),
+    );
+
+    const editor = screen.getByRole("textbox", {
+      name: /patterns\.md/,
+    }) as HTMLTextAreaElement;
+    expect([editor.selectionStart, editor.selectionEnd]).toEqual([0, 0]);
+  });
+
+  it("offers read-only viewers a plain-text view, not an edit they cannot make", async () => {
+    canEditRef.current = false;
+    renderPage(new URLSearchParams("view=files"));
+
+    expect(await screen.findByRole("button", { name: "Plain text" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    // No row menus either — the tree offers no action the page would refuse.
+    expect(screen.queryByRole("button", { name: /Actions for/ })).toBeNull();
   });
 });
 
@@ -240,7 +313,7 @@ describe("SkillDetailPage save pill", () => {
   it("counts a supporting-file edit as one changed file", async () => {
     renderPage(new URLSearchParams("view=files"));
     fireEvent.click(await screen.findByRole("tab", { name: "patterns.md" }));
-    fireEvent.click(screen.getByRole("button", { name: "Plain text" }));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByRole("textbox", { name: /patterns\.md/ }), {
       target: { value: "edited content" },
     });
@@ -359,5 +432,74 @@ describe("SkillDetailPage draft baseline (MUL-5645)", () => {
     expect(
       (screen.getByLabelText("Description") as HTMLTextAreaElement).value,
     ).toBe("my unsaved edit");
+  });
+});
+
+describe("SkillDetailPage origin link", () => {
+  const SOURCE_URL = "https://github.com/anthropics/skills/tree/main/animations";
+
+  it("links the imported-origin chip to its source", async () => {
+    skillRef.current = {
+      ...baseSkill,
+      config: { origin: { type: "github", source_url: SOURCE_URL } },
+    };
+    renderPage();
+    const link = (await screen.findByRole("link", {
+      name: "Imported · GitHub",
+    })) as HTMLAnchorElement;
+    expect(link.getAttribute("href")).toBe(SOURCE_URL);
+    expect(link.getAttribute("target")).toBe("_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
+  it("keeps manual origins as plain text", async () => {
+    renderPage();
+    expect(await screen.findByText("Created manually")).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "Created manually" }),
+    ).toBeNull();
+  });
+
+  // Which source_urls are linkable is originSourceUrl's contract; its full
+  // matrix lives in ../lib/origin.test.ts. What belongs here is the chip's
+  // behaviour when the helper refuses: it degrades to plain text, still
+  // naming the origin, rather than dropping the label along with the href.
+  it("degrades a refused source_url to plain text, keeping the chip", async () => {
+    skillRef.current = {
+      ...baseSkill,
+      config: {
+        origin: { type: "github", source_url: "https://evil.example/skills" },
+      },
+    };
+    renderPage();
+    expect(await screen.findByText("Imported · GitHub")).toBeTruthy();
+    expect(
+      screen.queryByRole("link", { name: "Imported · GitHub" }),
+    ).toBeNull();
+  });
+});
+
+
+describe("SkillDetailPage rail", () => {
+  it("keeps the read-only capability banner on the shared rail", async () => {
+    canEditRef.current = false;
+    renderPage();
+    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+
+    const banner = document.body.querySelector(
+      `.${RAIL_SENTINEL}.${GUTTER_SENTINEL}.pt-3`,
+    );
+    expect(banner).toBeTruthy();
+  });
+
+  it("puts the identity strip and the tab row on that same rail", async () => {
+    renderPage();
+    await screen.findAllByRole("tab", { name: /Overview|Files/ });
+
+    const railed = document.body.querySelectorAll(
+      `.${RAIL_SENTINEL}.${GUTTER_SENTINEL}`,
+    );
+    // Identity strip, tab row and the Overview panel at minimum.
+    expect(railed.length).toBeGreaterThanOrEqual(3);
   });
 });

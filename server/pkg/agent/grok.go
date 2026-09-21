@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -144,9 +143,12 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	grokArgs = append(grokArgs, filterCustomArgs(opts.CustomArgs, grokBlockedArgs, b.cfg.Logger)...)
 	grokArgs = append(grokArgs, "stdio")
 
-	cmd := exec.CommandContext(runCtx, execPath, grokArgs...)
+	cmd := b.cfg.commandAt(execPath).exec(runCtx, grokArgs...)
 	hideAgentWindow(cmd)
-	b.cfg.Logger.Info("agent command", "exec", execPath, "args", grokArgs)
+	b.cfg.logAgentCommand(cmd, newAgentCommandLogArgs(grokArgs,
+		trustAgentCommandPositional(1, "agent"),
+		trustAgentCommandPositional(len(grokArgs)-1, "stdio"),
+	))
 	if opts.Cwd != "" {
 		cmd.Dir = opts.Cwd
 	}
@@ -173,7 +175,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		return nil, fmt.Errorf("grok stderr pipe: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
+	if err := startOwnedProcessTree(cmd, b.cfg.Logger); err != nil {
 		cancel()
 		return nil, fmt.Errorf("start grok: %w", err)
 	}
@@ -239,8 +241,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 1024*1024), 10*1024*1024)
+		scanner := newAgentStreamScanner(stdout)
 		for scanner.Scan() {
 			line := strings.TrimSpace(scanner.Text())
 			if line == "" {
@@ -258,6 +259,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		defer func() {
 			stdin.Close()
 			_ = cmd.Wait()
+			releaseProcessGroup(cmd)
 		}()
 
 		startTime := time.Now()
@@ -314,7 +316,7 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 
 		// Drop MCP entries whose remote transport the runtime didn't advertise.
 		// See hermes.go for why sending an unsupported transport tanks session/new.
-		mcpServers = filterACPMcpServersByCapability(mcpServers, extractACPMcpCapabilities(initResult), "grok", b.cfg.Logger)
+		mcpServers = filterACPMcpServersByCapability(mcpServers, extractACPMcpCapabilities(initResult), "grok", b.cfg)
 
 		cwd := opts.Cwd
 		if cwd == "" {
@@ -328,9 +330,13 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				"mcpServers": mcpServers,
 			})
 			if err != nil {
-				finalStatus = "failed"
-				finalError = fmt.Sprintf("grok session/load failed: %v", err)
-				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds()}
+				// A runtime that refuses the recorded id has to say so here:
+				// without ResumeRejected the daemon reads the bare failure as
+				// "checked, not a rejection", keeps the pointer and replays the
+				// same dead session on every later turn (GH #8116).
+				finalStatus, finalError, resumeRejected = classifyACPResumeFailure(
+					runCtx, "grok", "session/load", err, timeout, b.cfg.Logger)
+				resCh <- Result{Status: finalStatus, Error: finalError, DurationMs: time.Since(startTime).Milliseconds(), ResumeRejected: resumeRejected}
 				return
 			}
 			var changed bool
@@ -369,8 +375,6 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		}
 
 		c.sessionID = sessionID
-		// Early session pin so a cancelled run still preserves resume pointer.
-		msgStream.send(Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 		b.cfg.Logger.Info("grok session created", "session_id", sessionID)
 
 		if opts.Model != "" {
@@ -381,7 +385,9 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				b.cfg.Logger.Warn("grok set_session_model failed", "error", err, "requested_model", opts.Model)
 				finalStatus = "failed"
 				finalError = fmt.Sprintf("grok could not switch to model %q: %v", opts.Model, err)
-				if opts.ResumeSessionID != "" && isACPSessionNotFound(err) {
+				if setupFailureWithholdsSessionID(opts) {
+					sessionID = ""
+				} else if isACPSessionNotFound(err) {
 					b.cfg.Logger.Warn("resumed session not found at set_model time; clearing session id so the daemon retries fresh",
 						"backend", "grok",
 						"session_id", sessionID,
@@ -407,6 +413,16 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 			// Multica runtime brief delivery when file injection is not enough.
 			userText = opts.SystemPrompt + "\n\n---\n\n" + prompt
 		}
+
+		// Session pin for the daemon (PinTaskSession keys off
+		// MessageStatus+SessionID), deliberately sent only once setup has
+		// succeeded and the prompt is about to go out. Pinning right after
+		// session creation used to publish the id before set_model could fail,
+		// and FailAgentTask merges session_id with COALESCE — so a setup failure
+		// could no longer take the id back and left a ghost pointer on the task
+		// row for the next turn to resume forever (GH #8116). A cancel between
+		// here and the prompt response is still covered: this send happens first.
+		msgStream.send(Message{Type: MessageStatus, Status: "running", SessionID: sessionID})
 
 		streamingCurrentTurn.Store(true)
 		_, err = c.request(runCtx, "session/prompt", map[string]any{
@@ -449,16 +465,11 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 				if effectiveModel == "" {
 					effectiveModel = pr.modelID
 				}
-				c.usageMu.Lock()
-				c.usage.InputTokens += pr.usage.InputTokens
-				c.usage.OutputTokens += pr.usage.OutputTokens
-				c.usage.CacheReadTokens += pr.usage.CacheReadTokens
 				// xAI prices the turn itself and reports the result here.
 				// Carrying it through is the only way the ≥200K long-context
 				// surcharge reaches the bill — token counts alone cannot
 				// reconstruct which tier a request hit.
-				c.usage.CostUSDTicks += pr.usage.CostUSDTicks
-				c.usageMu.Unlock()
+				c.mergeUsage(pr.usage)
 			default:
 			}
 			waitForGrokNotificationQuiescence(runCtx, activity, readerDone)
@@ -492,12 +503,10 @@ func (b *grokBackend) Execute(ctx context.Context, prompt string, opts ExecOptio
 		// lands before a tool call stays visible.
 		finalStatus, finalError = promoteACPResultOnProviderError(finalStatus, finalError, providerErrorOutput, providerErr)
 
-		c.usageMu.Lock()
-		u := c.usage
-		c.usageMu.Unlock()
+		u := c.accumulatedUsage()
 
 		var usageMap map[string]TokenUsage
-		if u.InputTokens > 0 || u.OutputTokens > 0 || u.CacheReadTokens > 0 || u.CacheWriteTokens > 0 {
+		if acpUsagePresent(u) {
 			model := effectiveModel
 			if model == "" {
 				model = "unknown"

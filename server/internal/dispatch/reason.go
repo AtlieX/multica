@@ -31,6 +31,24 @@ const (
 	// that runtime is not online at dispatch time. The task is not lost — the
 	// user's fix is to bring the machine back, and queued work waits for it.
 	ReasonRuntimeOffline ReasonCode = "runtime_offline"
+	// ReasonRuntimeUnusable: the target is bound to a runtime whose machine is
+	// reachable, but whose agent CLI cannot be executed there — the npm
+	// placeholder stub left behind when a package's postinstall was blocked is
+	// the case in the field (MUL-6164). Distinct from runtime_offline for the
+	// same reason agent_runtime_required is: waiting changes nothing here. The
+	// machine is already on, and the fix is a command the user runs on it, which
+	// the daemon reports with this verdict so clients can show it.
+	ReasonRuntimeUnusable ReasonCode = "runtime_unusable"
+	// ReasonRuntimeProfileMissing: the target is bound to a reachable runtime
+	// whose agent CLI runs fine, but a runtime profile that CLI needs in order
+	// to speak Multica's protocol is not installed on that machine — DeepSeek
+	// Harness, whose `multica` profile supplies the `--stdio` protocol, is the
+	// case in the field. Blocked for the same reason as runtime_unusable
+	// (MUL-6164): the machine is already on and waiting changes nothing. Kept
+	// APART from runtime_unusable because the repair is different in kind — the
+	// CLI is not broken and reinstalling it fixes nothing, so copy that says
+	// "reinstall the CLI" sends the user to the wrong place entirely.
+	ReasonRuntimeProfileMissing ReasonCode = "runtime_profile_missing"
 	// ReasonAgentRuntimeRequired: the target is permitted but bound to no
 	// runtime at all (agent.runtime_id IS NULL), which is where an agent lands
 	// when its runtime is deleted (MUL-5559). Distinct from runtime_offline on
@@ -52,6 +70,12 @@ const (
 	// success: nothing new runs. (Named to avoid implying the NEW comment was
 	// already processed.)
 	ReasonSelfTriggerSuppressed ReasonCode = "self_trigger_suppressed"
+	// ReasonQuotaExceeded is a policy-neutral refusal for an exhausted
+	// Cloud-provided autopilot interval.
+	ReasonQuotaExceeded ReasonCode = "quota_exceeded"
+	// ReasonIssueLimitReached means a create_issue Autopilot was admitted for a
+	// run, but Cloud's effective workspace issue-count limit blocked the issue.
+	ReasonIssueLimitReached ReasonCode = "issue_limit_reached"
 	// ReasonInternalError: an unexpected server error prevented a clean decision.
 	ReasonInternalError ReasonCode = "internal_error"
 )

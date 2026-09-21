@@ -74,3 +74,8 @@ data/
 .kilo
 .idea
 .gstack/
+
+# Python (agent tooling)
+__pycache__/
+*.pyc
+perf-report/

@@ -1,6 +1,8 @@
 "use client";
 
-import { useRef, useState, useCallback, useEffect } from "react";
+import { composeAnnotatedReply, EMPTY_REPLY_ANNOTATIONS, hasReplyIntent } from "@multica/core/drafts/reply-annotation";
+import { ReplyAnnotations } from "./reply-annotations";
+import { useRef, useState, useCallback, useEffect, useMemo } from "react";
 import { ContentEditor, type ContentEditorRef, useFileDropZone, FileDropOverlay, useLazyEditor, useUploadGate, useComposerSubmit } from "../../editor";
 import { FileUploadButton } from "@multica/ui/components/common/file-upload-button";
 import { SubmitButton } from "@multica/ui/components/common/submit-button";
@@ -14,6 +16,7 @@ import { useT } from "../../i18n";
 import { CommentTriggerChips } from "./comment-trigger-chips";
 import { useCommentTriggerPreview } from "../hooks/use-comment-trigger-preview";
 import { useCommentUploads } from "./use-comment-uploads";
+import { useQuickActionMenu } from "../hooks/use-quick-action-menu";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -27,12 +30,16 @@ interface ReplyInputProps {
   avatarId: string;
   /** Resolves true on success, false on failure — the reply box keeps its text
    *  (locked + spinning) until then, clearing only on success. */
-  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<boolean>;
+  onSubmit: (content: string, attachmentIds?: string[], suppressAgentIds?: string[]) => Promise<string | boolean>;
+  /** Called after the server accepts the reply and the composer is cleared. */
+  onAccepted?: (commentId: string) => void;
   size?: "sm" | "default";
   /** When set, hydrates/persists the in-progress reply via the draft store.
    *  Required for replies inside virtualized timeline threads, where the
    *  enclosing CommentCard may unmount on scroll-out. */
   draftKey?: CommentDraftKey;
+  targetMissing?: boolean;
+  onEditAnnotation?: (id: string) => boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -46,8 +53,11 @@ function ReplyInput({
   avatarType,
   avatarId,
   onSubmit,
+  onAccepted,
   size = "default",
   draftKey,
+  onEditAnnotation,
+  targetMissing = false,
 }: ReplyInputProps) {
   const { t } = useT("issues");
   const { t: tEditor } = useT("editor");
@@ -57,6 +67,10 @@ function ReplyInput({
   const composerRef = useRef<HTMLDivElement>(null);
   // See CommentInput — replying mid-upload posts without the file.
   const uploadGate = useUploadGate(editorRef);
+  // Quick actions in the `/` menu — same catalog and same insert-don't-run
+  // behavior as the top-level composer. A reply posts to the same issue, so
+  // `/` has to offer the same thing here (MUL-5588).
+  const quickActionMenu = useQuickActionMenu(issueId);
   // If a draft key is provided, hydrate from store on mount (defaultValue is
   // the only injection point on ContentEditorRef) and flush on every onUpdate.
   const [initialDraft] = useState(() =>
@@ -66,7 +80,10 @@ function ReplyInput({
   const setDraft = useCommentDraftStore((s) => s.setDraft);
   const [isEmpty, setIsEmpty] = useState(!initialDraft?.trim());
   const [suppressedAgentIds, setSuppressedAgentIds] = useState<Set<string>>(() => new Set());
-  const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content });
+  const annotations = useCommentDraftStore((s) => draftKey ? s.getAnnotations(draftKey) : EMPTY_REPLY_ANNOTATIONS);
+  const composedContent = useMemo(() => composeAnnotatedReply(content, annotations), [content, annotations]);
+  const canSend = !targetMissing && (annotations.length ? hasReplyIntent(content, annotations) : !isEmpty);
+  const triggerPreview = useCommentTriggerPreview({ issueId, parentId, content: canSend ? composedContent : "" });
   // Uploads for this reply session (MUL-5181) — owned by the coordinator. With
   // a draftKey they persist in the draft store so scroll-out/close no longer
   // drops an in-flight upload; without one (no persistence context) they fall
@@ -142,11 +159,16 @@ function ReplyInput({
   // See CommentInput: bound to the branch that actually wiped the editor, so a
   // draft the stale-submit guard kept is never disturbed.
   const editorScrubbedRef = useRef(false);
+  const acceptedCommentIdRef = useRef<string | null>(null);
 
   const { submitting, submit } = useComposerSubmit({
     editorRef,
     uploadGate: gate,
     containerRef: composerRef,
+    normalize: (raw) => {
+      const current = draftKey ? useCommentDraftStore.getState().getAnnotations(draftKey) : EMPTY_REPLY_ANNOTATIONS;
+      return !targetMissing && hasReplyIntent(raw, current) ? composeAnnotatedReply(raw, current) : "";
+    },
     // A thread reply is rarely the last thing the user has to say, so the caret
     // stays in the box for the next one. Unlike a top-level comment, the posted
     // reply lands directly above the box that is still focused — nothing needs
@@ -174,7 +196,10 @@ function ReplyInput({
         content,
         activeIds.length > 0 ? activeIds : undefined,
         suppressAgentIds.length > 0 ? suppressAgentIds : undefined,
-      );
+      ).then((commentId) => {
+        acceptedCommentIdRef.current = typeof commentId === "string" ? commentId : null;
+        return !!commentId;
+      });
     },
     onAccepted: () => {
       // Success may only consume the entry it submitted — see CommentInput.
@@ -195,6 +220,7 @@ function ReplyInput({
       setIsEmpty(true);
       setSuppressedAgentIds(new Set());
       editorScrubbedRef.current = true;
+      if (acceptedCommentIdRef.current) onAccepted?.(acceptedCommentIdRef.current);
     },
   });
 
@@ -213,9 +239,14 @@ function ReplyInput({
         ref={composerRef}
         className={cn(
           "relative min-w-0 flex-1 flex flex-col",
-          !isEmpty && "pb-9",
+          (!isEmpty || annotations.length > 0) && "pb-9",
         )}
       >
+        {draftKey && annotations.length > 0 && <>
+          {targetMissing && <p role="alert" className="mb-2 text-caption text-destructive">{t(($) => $.reply.annotations.target_deleted)}</p>}
+          <ReplyAnnotations draftKey={draftKey} annotations={annotations}
+            disabled={submitting} onEditAnnotation={onEditAnnotation} />
+        </>}
         {/* Lock the editor while the reply is in flight — see CommentInput. */}
         {lazy.active && (
         <div
@@ -246,6 +277,7 @@ function ReplyInput({
             attachments={pendingAttachments}
             enableSlashCommands
             slashCommandMode="command"
+            quickActionMenu={quickActionMenu}
           />
         </div>
         )}
@@ -275,7 +307,7 @@ function ReplyInput({
           <CommentTriggerChips
             agents={triggerPreview.agents}
             blocked={triggerPreview.blocked}
-            draftContent={content}
+            draftContent={composedContent}
             suppressedAgentIds={suppressedAgentIds}
             onToggle={toggleSuppressedAgent}
           />
@@ -288,11 +320,13 @@ function ReplyInput({
           />
           <SubmitButton
             onClick={submit}
-            disabled={isEmpty}
+            disabled={!canSend}
             loading={submitting}
             busy={gate.uploading}
             tooltip={gate.uploading
               ? tEditor(($) => $.upload.in_progress)
+              : !canSend && annotations.length > 0 && !targetMissing
+                ? t(($) => $.reply.annotations.intent_hint)
               : sendShortcut
                 ? `${t(($) => $.comment.send_tooltip)} · ${formatShortcut(sendShortcut)}`
                 : t(($) => $.comment.send_tooltip)}

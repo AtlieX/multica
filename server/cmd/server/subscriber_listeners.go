@@ -13,6 +13,13 @@ import (
 	"github.com/multica-ai/multica/server/pkg/protocol"
 )
 
+// isAssignmentRecipientType reports whether an assignee can own a subscriber
+// or inbox row. Squads are routing objects whose work runs through the leader;
+// they are not user identities and have no inbox to consume.
+func isAssignmentRecipientType(assigneeType string) bool {
+	return assigneeType == "member" || assigneeType == "agent"
+}
+
 // registerSubscriberListeners wires up event bus listeners that auto-subscribe
 // relevant users to issues. This ensures creators, assignees, and commenters
 // are automatically tracked as issue subscribers.
@@ -38,8 +45,9 @@ func registerSubscriberListeners(bus *events.Bus, pool *pgxpool.Pool) {
 		// Subscribe the creator
 		addSubscriber(bus, queries, e.WorkspaceID, issue.ID, issue.CreatorType, issue.CreatorID, "creator")
 
-		// Subscribe the assignee if exists and different from creator
+		// Subscribe the assignee if it is a direct recipient and differs from the creator.
 		if issue.AssigneeType != nil && issue.AssigneeID != nil &&
+			isAssignmentRecipientType(*issue.AssigneeType) &&
 			!(*issue.AssigneeType == issue.CreatorType && *issue.AssigneeID == issue.CreatorID) {
 			addSubscriber(bus, queries, e.WorkspaceID, issue.ID, *issue.AssigneeType, *issue.AssigneeID, "assignee")
 		}
@@ -72,7 +80,7 @@ func registerSubscriberListeners(bus *events.Bus, pool *pgxpool.Pool) {
 
 		// Subscribe new assignee if assignee changed
 		if assigneeChanged, _ := payload["assignee_changed"].(bool); assigneeChanged {
-			if issue.AssigneeType != nil && issue.AssigneeID != nil {
+			if issue.AssigneeType != nil && issue.AssigneeID != nil && isAssignmentRecipientType(*issue.AssigneeType) {
 				addSubscriber(bus, queries, e.WorkspaceID, issue.ID, *issue.AssigneeType, *issue.AssigneeID, "assignee")
 			}
 		}
@@ -144,6 +152,12 @@ func registerSubscriberListeners(bus *events.Bus, pool *pgxpool.Pool) {
 // rule is the point: the defect being fixed is attribution and notification
 // disagreeing about whose behalf an issue exists on.
 //
+// Attribution answers "whose authority does this run carry", which since MUL-6951
+// is a broader population than "who asked for this work" — an armed autopilot
+// trigger carries its creator's. Visibility follows the narrower one, so the read
+// also walks the chain back to the run that resolved the human and hands the rule
+// that root's label (MUL-7051).
+//
 // Everything is best-effort and logged, never fatal — the issue is already
 // committed and a subscription hiccup must not look like a creation failure.
 func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Queries, workspaceID, issueID string) {
@@ -161,11 +175,13 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 		return
 	}
 
-	// Workspace-scoped so a foreign origin id can never resolve a human from
-	// another tenant (the MUL-4252 guard the comment chain already applies).
-	originTask, err := queries.GetAgentTaskInWorkspace(ctx, db.GetAgentTaskInWorkspaceParams{
-		ID:          issue.OriginID,
-		WorkspaceID: parseUUID(workspaceID),
+	// The origin run's human, plus how the chain it belongs to acquired that
+	// human — one walk, workspace-scoped at every hop so a foreign origin id can
+	// never resolve someone from another tenant (the MUL-4252 guard the comment
+	// chain already applies).
+	facts, err := queries.GetDelegatedSubscriptionFacts(ctx, db.GetDelegatedSubscriptionFactsParams{
+		OriginTaskID: issue.OriginID,
+		WorkspaceID:  parseUUID(workspaceID),
 	})
 	if err != nil {
 		// A missing origin task is normal (cancelled/reaped run), not an error
@@ -178,7 +194,8 @@ func subscribeDelegatedHuman(bus *events.Bus, pool *pgxpool.Pool, queries *db.Qu
 	human, reason, ok := attribution.DelegatedSubscriber(attribution.SubscriptionFacts{
 		CreatorType:      issue.CreatorType,
 		OriginType:       issue.OriginType.String,
-		OriginOriginator: originTask.OriginatorUserID,
+		OriginOriginator: facts.OriginatorUserID,
+		OriginRootSource: attribution.Source(facts.RootSource.String),
 	})
 	if !ok {
 		return

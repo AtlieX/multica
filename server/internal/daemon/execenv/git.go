@@ -182,22 +182,6 @@ func repoNameFromURL(url string) string {
 	}
 	return name
 }
-var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
-
-// sanitizeName produces a git-branch-safe name from a human-readable string.
-func sanitizeName(name string) string {
-	s := strings.ToLower(strings.TrimSpace(name))
-	s = nonAlphanumeric.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if len(s) > 30 {
-		s = s[:30]
-		s = strings.TrimRight(s, "-")
-	}
-	if s == "" {
-		s = "agent"
-	}
-	return s
-}
 
 // taskKeyLen is how many hex chars of the task id identify a task in a path or
 // a branch name. Every char here is spent twice — the env root prefixes the
@@ -212,11 +196,11 @@ const taskKeyLen = 12
 //
 // Which end matters more than how many chars. Task ids are UUIDv7 — 48 bits of
 // millisecond timestamp, then randomness. The leading 8 hex chars are the high
-// 32 bits of that timestamp, so they only advance once every 2^16 ms
-// (~65.5s): taking them from the front gave every task started inside one such
-// window an identical segment, and therefore one shared env root. That is not
-// a rare hash collision, it is the common case, and it made Prepare's "remove
-// existing env" step delete a concurrently running task's directory (#7326).
+// 32 bits of that timestamp, so they only advance once every 2^16 ms (~65.5s):
+// taking them from the front gave every task started inside one such window an
+// identical segment, and therefore one shared env root. That is not a rare hash
+// collision, it is the common case, and it made Prepare's "remove existing env"
+// step delete a concurrently running task's directory (#7326).
 //
 // The tail is drawn from the id's random field, so 12 chars carry 48 random
 // bits. Prepare additionally refuses to delete an env root another task owns,
@@ -241,10 +225,24 @@ func shortID(uuid string) string {
 	return s
 }
 
-// BranchNameSegmentMax keeps branch path segments short enough for the worktree
-// layout and for Windows path limits. The value mirrors the local worktree
-// implementation so the same issue identifier produces the same shape in both
-// code paths.
+var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
+
+// sanitizeName produces a git-branch-safe name from a human-readable string.
+func sanitizeName(name string) string {
+	s := strings.ToLower(strings.TrimSpace(name))
+	s = nonAlphanumeric.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if len(s) > 30 {
+		s = s[:30]
+		s = strings.TrimRight(s, "-")
+	}
+	if s == "" {
+		s = "agent"
+	}
+	return s
+}
+
+// Longest readable segment allowed in a branch name.
 const branchNameSegmentMax = 24
 
 // issueBranchSegment returns the branch segment used for a task branch. Issue
@@ -275,7 +273,6 @@ func issueBranchSegment(issueIdentifier, taskID string) string {
 	return label + "-" + suffix
 }
 
-// TaskKey exposes the task branch segment helper to other daemon packages.
 func TaskKey(uuid string) string { return taskKey(uuid) }
 
 // IssueBranchSegment exposes the branch-name segment helper to other daemon
