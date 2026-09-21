@@ -233,6 +233,7 @@ func TestRunRepoCheckoutForwardsManagedCheckoutMode(t *testing.T) {
 	}
 	if got := body["issue_identifier"]; got != "MUL-123" {
 		t.Fatalf("issue_identifier = %q, want MUL-123", got)
+	}
 	if got := body["retry_busy"]; got != true {
 		t.Fatalf("retry_busy = %v, want true", got)
 	}
@@ -319,6 +320,7 @@ func TestRunRepoCheckoutRetriesServiceUnavailable(t *testing.T) {
 	t.Setenv("MULTICA_WORKSPACE_ID", "ws-1")
 	t.Setenv("MULTICA_AGENT_NAME", "Test Agent")
 	t.Setenv("MULTICA_TASK_ID", "task-1")
+	t.Setenv("MULTICA_ISSUE_IDENTIFIER", "MUL-123")
 	t.Setenv("MULTICA_TOKEN", "mat_repo_checkout_test")
 
 	if err := runRepoCheckout(&cobra.Command{}, []string{"https://github.com/org/repo.git"}); err != nil {

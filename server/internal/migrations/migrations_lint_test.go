@@ -17,6 +17,16 @@ func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 	// From 129 onward, keep the numeric sequence unique so release tooling and
 	// operators can identify one schema change unambiguously by its number.
 	const firstUniqueMigrationNumber = 129
+	// One post-129 collision is permitted, and only this one: our fork's
+	// 252_docs and upstream's 252_agent_builder_draft independently claimed
+	// 252 before the branches were merged. Both are already APPLIED in
+	// production (both rows are in schema_migrations, and the doc table
+	// exists), so renaming either file would make the migrator treat an
+	// applied migration as new. Any other duplicate still fails this test.
+	allowedDuplicateStems := map[string]bool{
+		"252_docs":                true,
+		"252_agent_builder_draft": true,
+	}
 	stemByNumber := make(map[int]string)
 	for _, file := range files {
 		stem, _, ok := splitMigrationFilename(filepath.Base(file))
@@ -32,6 +42,9 @@ func TestMigrationNumericPrefixesAreUnique(t *testing.T) {
 			continue
 		}
 		if previous, exists := stemByNumber[number]; exists {
+			if allowedDuplicateStems[previous] && allowedDuplicateStems[stem] {
+				continue
+			}
 			t.Errorf("migrations %s and %s share numeric prefix %s", previous, stem, prefix)
 			continue
 		}

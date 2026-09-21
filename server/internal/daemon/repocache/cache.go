@@ -2306,7 +2306,7 @@ func resolveHookDir(worktreePath string) (string, error) {
 		commonDir = filepath.Join(worktreePath, commonDir)
 	}
 
-	out, err = runGitOutput("-C", worktreePath, "config", "--get", "core.hooksPath")
+	out, err = runGitOutput("-C", worktreePath, "config", "--local", "--get", "core.hooksPath")
 	if err != nil {
 		var exitErr *exec.ExitError
 		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
