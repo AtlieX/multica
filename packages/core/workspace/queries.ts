@@ -213,3 +213,19 @@ export function agentMcpServersOptions(agentId: string) {
     enabled: agentId !== "",
   });
 }
+
+export function docListOptions(wsId: string) {
+  return {
+    queryKey: workspaceKeys.docs(wsId),
+    queryFn: () => api.listDocs(),
+    enabled: !!wsId,
+  };
+}
+
+export function docDetailOptions(wsId: string, docId: string) {
+  return {
+    queryKey: [...workspaceKeys.docs(wsId), docId] as const,
+    queryFn: () => api.getDoc(docId),
+    enabled: !!docId,
+  };
+}
