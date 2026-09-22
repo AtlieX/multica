@@ -12,6 +12,12 @@ cd "$ROOT_DIR"
 # this value, so run_recipe seeds it into the recipe .env as well.
 export JWT_SECRET=test-secret-for-config-test
 
+# docker-compose*.yml also require COMPOSE_PROJECT_NAME (the guard that
+# stops a stray checkout hijacking the live stack). This script only ever
+# runs read-only `docker compose config`, so seed a throwaway name that can
+# never collide with the live project.
+export COMPOSE_PROJECT_NAME=multica-selfhost-config-test
+
 require_config() {
   local config=$1
   local expected=$2

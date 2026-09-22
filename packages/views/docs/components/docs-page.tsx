@@ -91,7 +91,7 @@ export function DocsPage() {
           <FileText className="h-4 w-4 text-muted-foreground" />
           <h1 className="text-sm font-medium">Docs</h1>
           {docs.length > 0 && (
-            <span className="font-mono text-xs tabular-nums text-muted-foreground/70">
+            <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {docs.length}
             </span>
           )}
