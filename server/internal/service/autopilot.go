@@ -1371,13 +1371,22 @@ func (s *AutopilotService) shouldSkipDispatch(ctx context.Context, ap db.Autopil
 		if actorUserID.Valid {
 			return "you are not allowed to trigger this autopilot's assignee agent", dispatch.ReasonInvocationNotAllowed, true
 		}
+		if !triggerID.Valid {
+			// No actor AND no trigger: there is no trigger row whose owner could be
+			// at fault, so the trigger phrasing below would name a thing that does
+			// not exist. That message on the manual path is what sent #8078 hunting
+			// for a broken trigger owner for a day. This must stay AHEAD of the
+			// creator-reason check below: a manual "run now" passes exactly this
+			// pair, and the creator detail would otherwise shadow it.
+			return "this dispatch resolved no authorizing human and carries no trigger to resolve one from", dispatch.ReasonInvocationNotAllowed, true
+		}
 		// Report the side that actually failed. The previous fixed string
 		// always blamed a "private assignee agent", which is misleading when
 		// the agent is public_to and the creator is the problem.
 		if _, reason := s.creatorInvokeAgentReason(ctx, ap, agent); reason != "" {
 			return reason, dispatch.ReasonInvocationNotAllowed, true
 		}
-		return "autopilot creator cannot invoke the assignee agent", dispatch.ReasonInvocationNotAllowed, true
+		return "this trigger's owner lacks access to the private assignee agent, or the trigger records no owner", dispatch.ReasonInvocationNotAllowed, true
 	}
 	return "", "", false
 }
