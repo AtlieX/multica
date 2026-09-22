@@ -60,6 +60,27 @@ CLEAN_ENV=(env
   -u MULTICA_TASK_CONFIG_ROOT -u MULTICA_TASK_WORKSPACES_ROOT
   -u MULTICA_WORKSPACES_ROOT)
 
+DEV_CLI_HOME=""
+
+prepare_cli_home() {
+  if [ "$DEV_PROFILES_HOME" = "$HOME/.multica/profiles" ]; then
+    DEV_CLI_HOME="$HOME"
+    return 0
+  fi
+
+  DEV_CLI_HOME="$DEV_HOME/cli-home"
+  mkdir -p "$DEV_CLI_HOME/.multica" "$DEV_PROFILES_HOME"
+  if [ -e "$DEV_CLI_HOME/.multica/profiles" ] && [ ! -L "$DEV_CLI_HOME/.multica/profiles" ]; then
+    die "Cannot prepare isolated CLI home: $DEV_CLI_HOME/.multica/profiles exists and is not a symlink."
+  fi
+  ln -sfn "$DEV_PROFILES_HOME" "$DEV_CLI_HOME/.multica/profiles"
+}
+
+multica_cli() {
+  prepare_cli_home
+  "${CLEAN_ENV[@]}" HOME="$DEV_CLI_HOME" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" "$MULTICA_BIN" "$@"
+}
+
 # ---------------------------------------------------------------- output ----
 
 if [ -t 1 ]; then
@@ -734,11 +755,9 @@ start_daemon() {
   info "Building $MULTICA_BIN (a go run daemon would fail every task later)."
   (cd "$REPO_ROOT/server" && go build -o bin/multica ./cmd/multica) || die "Failed to build the multica CLI."
 
-  "${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
-    "$MULTICA_BIN" daemon start --profile "$PROFILE" 2>&1 | sed 's/^/    /' || true
+  multica_cli daemon start --profile "$PROFILE" 2>&1 | sed 's/^/    /' || true
 
-  status="$("${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
-    "$MULTICA_BIN" daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
+  status="$(multica_cli daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
   state="$(json_field "$status" status || echo unknown)"
   # `daemon status` reports "stopped" plus port_conflict when the daemon
   # answering this profile's health port belongs to another profile, so a
@@ -825,12 +844,10 @@ stop_component() {
   case "$name" in
     daemon)
       if [ -x "$MULTICA_BIN" ]; then
-        if "${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
-          "$MULTICA_BIN" daemon stop --profile "$PROFILE" >/dev/null 2>&1; then
+        if multica_cli daemon stop --profile "$PROFILE" >/dev/null 2>&1; then
           ok "daemon stopped"
         else
-          status="$("${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
-            "$MULTICA_BIN" daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
+          status="$(multica_cli daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
           state="$(json_field "$status" status || echo stopped)"
           if [ "$state" = running ]; then
             warn "daemon for profile $PROFILE is still running"
@@ -946,8 +963,7 @@ component_state() {
     daemon)
       local status state
       if [ -x "$MULTICA_BIN" ]; then
-        status="$("${CLEAN_ENV[@]}" MULTICA_WORKSPACES_ROOT="$WORKSPACES_ROOT" \
-          "$MULTICA_BIN" daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
+        status="$(multica_cli daemon status --profile "$PROFILE" --output json 2>/dev/null || true)"
         state="$(json_field "$status" status || echo stopped)"
         printf '%s|%s|pid %s' "$state" "$PROFILE" "$(json_field "$status" pid || echo '-')"
       else

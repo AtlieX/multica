@@ -220,12 +220,34 @@ rewritten="$(bash -c 'source "$1"; database_url_with_name "$2" "$3"' _ \
 # ---------------------------------------------------------------------------
 write_manifest "probe-901" "$tmp_dir/checkout" 901
 mkdir -p "$tmp_dir/checkout"
+mkdir -p "$tmp_dir/checkout/server/bin"
+cat > "$tmp_dir/checkout/server/bin/multica" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = daemon ] && [ "${2:-}" = status ]; then
+  profiles_link="$HOME/.multica/profiles"
+  if [ -L "$profiles_link" ] \
+    && [ "$(readlink "$profiles_link")" = "$MULTICA_DEV_PROFILES_HOME" ] \
+    && [ -z "${MULTICA_TASK_CONFIG_ROOT:-}" ] \
+    && [ -z "${MULTICA_TASK_WORKSPACES_ROOT:-}" ] \
+    && [ -n "${MULTICA_WORKSPACES_ROOT:-}" ]; then
+    printf '{"status":"stopped"}\n'
+  else
+    printf '{"status":"unknown_profile"}\n'
+  fi
+  exit 0
+fi
+echo "unexpected fake multica invocation: $*" >&2
+exit 1
+EOF
+chmod +x "$tmp_dir/checkout/server/bin/multica"
 
 dev_env list > "$out" 2>&1 || fail "list must succeed with one environment"
 require_contains "$out" "probe-901"
 require_contains "$out" "18981"
 
-dev_env status probe-901 --json > "$out" 2>&1 || fail "status --json must succeed"
+MULTICA_TASK_CONFIG_ROOT=/owner/config \
+MULTICA_TASK_WORKSPACES_ROOT=/owner/task-workspaces \
+  dev_env status probe-901 --json > "$out" 2>&1 || fail "status --json must succeed"
 node -e '
   const fs = require("fs");
   const payload = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
@@ -238,6 +260,22 @@ node -e '
     }
   }
 ' "$out" || fail "status --json is not machine-readable"
+
+(
+  unset MULTICA_DEV_PROFILES_HOME
+  export HOME="$tmp_dir/default-home"
+  export MULTICA_DEV_HOME="$tmp_dir/default-dev"
+  mkdir -p "$HOME"
+  # shellcheck disable=SC1090
+  source "$root_dir/scripts/dev-env.sh"
+  prepare_cli_home
+  [ "$DEV_PROFILES_HOME" = "$HOME/.multica/profiles" ] \
+    || fail "default DEV_PROFILES_HOME changed when unset"
+  [ "$DEV_CLI_HOME" = "$HOME" ] \
+    || fail "default profile resolution should keep HOME as the CLI home"
+  [ ! -e "$MULTICA_DEV_HOME/cli-home/.multica/profiles" ] \
+    || fail "default profile resolution created an unnecessary CLI-home shim"
+)
 
 # ---------------------------------------------------------------------------
 # Stopping an environment that is not running is a no-op that SUCCEEDS.
