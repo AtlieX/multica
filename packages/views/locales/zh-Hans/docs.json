@@ -1,0 +1,10 @@
+{
+  "page": {
+    "title": "文档",
+    "new_doc": "新建文档",
+    "empty": "还没有文档。创建你的第一个文档。",
+    "not_found": "未找到文档。",
+    "title_placeholder": "无标题",
+    "body_placeholder": "写点什么…"
+  }
+}

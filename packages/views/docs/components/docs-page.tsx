@@ -10,6 +10,7 @@ import { docListOptions } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useT } from "../../i18n";
 import { PageHeader } from "../../layout/page-header";
 import { AppLink } from "../../navigation";
 
@@ -43,6 +44,7 @@ function buildTree(docs: Doc[]): { root: Doc[]; childrenOf: Map<string, Doc[]> }
 }
 
 function DocTree({ docs, paths }: { docs: Doc[]; paths: ReturnType<typeof useWorkspacePaths> }) {
+  const { t } = useT("docs");
   const { root, childrenOf } = buildTree(docs);
 
   function renderNodes(nodes: Doc[], depth: number): React.ReactNode {
@@ -58,7 +60,7 @@ function DocTree({ docs, paths }: { docs: Doc[]; paths: ReturnType<typeof useWor
     return (
       <div className="flex flex-col items-center gap-2 py-12 text-center text-muted-foreground">
         <FileText className="h-8 w-8 opacity-40" />
-        <p className="text-sm">No docs yet. Create your first doc.</p>
+        <p className="text-sm">{t(($) => $.page.empty)}</p>
       </div>
     );
   }
@@ -67,6 +69,7 @@ function DocTree({ docs, paths }: { docs: Doc[]; paths: ReturnType<typeof useWor
 }
 
 export function DocsPage() {
+  const { t } = useT("docs");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const qc = useQueryClient();
@@ -89,7 +92,7 @@ export function DocsPage() {
       <PageHeader className="justify-between px-5">
         <div className="flex items-center gap-2">
           <FileText className="h-4 w-4 text-muted-foreground" />
-          <h1 className="text-sm font-medium">Docs</h1>
+          <h1 className="text-sm font-medium">{t(($) => $.page.title)}</h1>
           {docs.length > 0 && (
             <span className="font-mono text-xs tabular-nums text-muted-foreground">
               {docs.length}
@@ -106,7 +109,7 @@ export function DocsPage() {
           }}
         >
           <Plus className="h-3 w-3" />
-          New Doc
+          {t(($) => $.page.new_doc)}
         </Button>
       </PageHeader>
 

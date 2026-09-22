@@ -1,0 +1,10 @@
+{
+  "page": {
+    "title": "Docs",
+    "new_doc": "New doc",
+    "empty": "No docs yet. Create your first doc.",
+    "not_found": "Doc not found.",
+    "title_placeholder": "Untitled",
+    "body_placeholder": "Write something…"
+  }
+}

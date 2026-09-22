@@ -9,12 +9,14 @@ import { docDetailOptions } from "@multica/core/workspace/queries";
 import { api } from "@multica/core/api";
 import { Button } from "@multica/ui/components/ui/button";
 import { Skeleton } from "@multica/ui/components/ui/skeleton";
+import { useT } from "../../i18n";
 import { ContentEditor, TitleEditor, type ContentEditorRef, type TitleEditorRef } from "../../editor";
 import { AppLink } from "../../navigation";
 
 const AUTOSAVE_DEBOUNCE_MS = 1500;
 
 export function DocDetailPage({ docId }: { docId: string }) {
+  const { t } = useT("docs");
   const wsId = useWorkspaceId();
   const paths = useWorkspacePaths();
   const qc = useQueryClient();
@@ -70,7 +72,7 @@ export function DocDetailPage({ docId }: { docId: string }) {
   if (!doc) {
     return (
       <div className="flex h-full items-center justify-center text-muted-foreground">
-        <p className="text-sm">Doc not found.</p>
+        <p className="text-sm">{t(($) => $.page.not_found)}</p>
       </div>
     );
   }
@@ -103,7 +105,7 @@ export function DocDetailPage({ docId }: { docId: string }) {
           <TitleEditor
             ref={titleEditorRef}
             defaultValue={doc.title}
-            placeholder="Untitled"
+            placeholder={t(($) => $.page.title_placeholder)}
             className="mb-4"
             onChange={(title) => {
               setPendingTitle(title);
@@ -113,7 +115,7 @@ export function DocDetailPage({ docId }: { docId: string }) {
           <ContentEditor
             ref={contentEditorRef}
             defaultValue={doc.content}
-            placeholder="Write something…"
+            placeholder={t(($) => $.page.body_placeholder)}
             onUpdate={(content) => {
               setPendingContent(content);
               scheduleSave({ title: pendingTitle ?? doc.title, content });
