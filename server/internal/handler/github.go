@@ -1707,6 +1707,10 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 					continue
 				}
 				if counts.OpenCount == 0 && counts.MergedWithCloseIntentCount > 0 {
+					if h.autoCloseWithheldForIntake(ctx, issue) {
+						h.postAutoCloseWithheldComment(ctx, issue, p)
+						continue
+					}
 					h.advanceIssueToDone(ctx, issue, workspaceID)
 				}
 			}
@@ -1829,8 +1833,11 @@ func extractClosingIdentifiers(parts ...string) []string {
 	seen := map[string]struct{}{}
 	out := []string{}
 	for _, src := range parts {
-		for _, m := range closingIdentifierRe.FindAllStringSubmatch(src, -1) {
-			ident := strings.ToUpper(m[1]) + "-" + m[2]
+		for _, loc := range closingIdentifierRe.FindAllStringSubmatchIndex(src, -1) {
+			if !closingTailRe.MatchString(src[loc[1]:]) {
+				continue
+			}
+			ident := strings.ToUpper(src[loc[2]:loc[3]]) + "-" + src[loc[4]:loc[5]]
 			if _, dup := seen[ident]; dup {
 				continue
 			}

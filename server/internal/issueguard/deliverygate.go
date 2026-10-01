@@ -52,6 +52,24 @@ func isCodeWritingAgentName(name string) bool {
 	return false
 }
 
+// IntakeAgentNames are agents that clarify requests but never deliver code.
+// A merged PR's closing keyword must not auto-close an issue they hold.
+var IntakeAgentNames = []string{
+	"client intake",
+}
+
+// IsIntakeAgentName reports whether name is one of IntakeAgentNames,
+// case-insensitively.
+func IsIntakeAgentName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, candidate := range IntakeAgentNames {
+		if lower == candidate {
+			return true
+		}
+	}
+	return false
+}
+
 // HasIssueLabel reports whether the issue carries an issue-scoped label
 // with the given name (case-insensitive), workspace-guarded the same way
 // as ListLabelsByIssue.
