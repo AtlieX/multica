@@ -134,6 +134,27 @@ func TestExtractClosingIdentifiers(t *testing.T) {
 			want: []string{"MUL-1"},
 		},
 		{
+			name: "identifier_as_sentence_subject_does_not_close",
+			// SPA-63 (2026-10-01): the PR fixed a widget bug and cited the
+			// issue only as an example. The identifier is followed by more
+			// sentence, so it is not the object of the keyword.
+			in:   []string{"", "Fixes: SPA-63 (made on `/vorur`) could not be found from the review link."},
+			want: []string{},
+		},
+		{
+			name: "keyword_then_prose_does_not_close",
+			in:   []string{"", "Fixes SPA-63 could not be found"},
+			want: []string{},
+		},
+		{
+			name: "trailer_shapes_close",
+			in: []string{
+				"Fix SPA-3: header copy",
+				"Fixes SPA-1\n\n## Summary\n- escaped newlines\nCloses SPA-2.\n(resolves SPA-4)\n- Fixes SPA-5, see below\nFixes SPA-6 and closes SPA-7\nFixes SPA-8",
+			},
+			want: []string{"SPA-3", "SPA-1", "SPA-2", "SPA-4", "SPA-5", "SPA-6", "SPA-7", "SPA-8"},
+		},
+		{
 			name: "no_match_on_disclosed_or_foreclose",
 			// Word-boundary guards against keyword fragments embedded
 			// in larger words ("Disclosed MUL-1", "Foreclose MUL-1").
