@@ -1380,13 +1380,26 @@ func (s *AutopilotService) shouldSkipDispatch(ctx context.Context, ap db.Autopil
 			// pair, and the creator detail would otherwise shadow it.
 			return "this dispatch resolved no authorizing human and carries no trigger to resolve one from", dispatch.ReasonInvocationNotAllowed, true
 		}
-		// Report the side that actually failed. The previous fixed string
-		// always blamed a "private assignee agent", which is misleading when
-		// the agent is public_to and the creator is the problem.
+		// Report the side that actually failed. Two sides can fail here, and the
+		// message must name which: the trigger resolved no owner at all, or it
+		// resolved one who may not invoke the agent. Resolve the principal first,
+		// because a resolution failure makes any statement about agent access
+		// meaningless — and the old single string said both at once, which is what
+		// cost OPS-747 a diagnosis pass (OPS-749).
+		if _, detail := ResolveAutopilotTriggerPrincipalDetail(ctx, s.Queries, triggerID, ap.ID, ap.WorkspaceID); detail != "" {
+			return detail, dispatch.ReasonInvocationNotAllowed, true
+		}
+		// A principal DID resolve, so the denial is about agent access. Prefer the
+		// creator-side reason when it also fails (it names membership vs allow-list
+		// explicitly); otherwise name the resolved trigger owner, not the creator.
+		// The previous fixed string always blamed a "private assignee agent", which
+		// is misleading when the agent is public_to and the owner is the problem.
 		if _, reason := s.creatorInvokeAgentReason(ctx, ap, agent); reason != "" {
 			return reason, dispatch.ReasonInvocationNotAllowed, true
 		}
-		return "this trigger's owner lacks access to the private assignee agent, or the trigger records no owner", dispatch.ReasonInvocationNotAllowed, true
+		principal := ResolveAutopilotTriggerPrincipal(ctx, s.Queries, triggerID, ap.ID, ap.WorkspaceID)
+		return fmt.Sprintf("trigger %s owner %s is not allowed to invoke assignee agent %q",
+			util.UUIDToString(triggerID), util.UUIDToString(principal), agent.Name), dispatch.ReasonInvocationNotAllowed, true
 	}
 	return "", "", false
 }
@@ -1522,8 +1535,13 @@ func (s *AutopilotService) recordSkippedRun(
 			"run_id", util.UUIDToString(run.ID), "error", err)
 	}
 
+	// trigger_id and workspace_id are on the line because the skip reason now
+	// names a specific row to go look at, and an operator grepping this log should
+	// not have to join back through autopilot_run to find which one (OPS-749).
 	slog.Info("autopilot dispatch skipped",
 		"autopilot_id", util.UUIDToString(autopilot.ID),
+		"workspace_id", util.UUIDToString(autopilot.WorkspaceID),
+		"trigger_id", util.UUIDToString(triggerID),
 		"run_id", util.UUIDToString(run.ID),
 		"source", source,
 		"reason", reason,

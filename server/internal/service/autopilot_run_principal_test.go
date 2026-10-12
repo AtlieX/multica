@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -259,6 +260,101 @@ func TestResolveAutopilotTriggerPrincipal_FailsClosed(t *testing.T) {
 		fx.Exec(t, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, fx.WorkspaceID, removed)
 		if got := ResolveAutopilotTriggerPrincipal(ctx, fx.q, triggerID, apUUID, wsUUID); got.Valid {
 			t.Fatalf("removed member still resolved %q; membership must be re-checked per dispatch", util.UUIDToString(got))
+		}
+	})
+}
+
+// OPS-749. The three admission failures below are distinct DB states and must
+// produce distinct, self-identifying reasons. The old single catch-all string
+// ("...lacks access to the private assignee agent, or the trigger records no
+// owner") made all three read as an agent-ACL problem, which sent the OPS-747
+// investigation to compare agent.visibility and the AUTOPILOT's created_by before a
+// second pass found the divergent field was the TRIGGER's created_by.
+func TestResolveAutopilotTriggerPrincipalDetail_DistinguishesFailures(t *testing.T) {
+	fx, creatorID := newPrincipalFixture(t)
+	ctx := context.Background()
+
+	agentID := fx.privateAgentOwnedBy(t, creatorID, "detail")
+	autopilotID, _ := fx.autopilotWithTrigger(t, agentID, creatorID, creatorID)
+	apUUID := util.MustParseUUID(autopilotID)
+	wsUUID := util.MustParseUUID(fx.WorkspaceID)
+
+	// mustFail asserts the branch resolved nobody and that its reason both contains
+	// every substring in want and omits every one in reject — the reject side is the
+	// actual regression guard, since the bug was one message serving three states.
+	mustFail := func(t *testing.T, triggerID pgtype.UUID, want, reject []string) {
+		t.Helper()
+		got, detail := ResolveAutopilotTriggerPrincipalDetail(ctx, fx.q, triggerID, apUUID, wsUUID)
+		if got.Valid {
+			t.Fatalf("resolved %q; must fail closed", util.UUIDToString(got))
+		}
+		if detail == "" {
+			t.Fatal("failed closed with no reason; the skip log would say nothing")
+		}
+		for _, w := range want {
+			if !strings.Contains(detail, w) {
+				t.Errorf("reason %q is missing %q", detail, w)
+			}
+		}
+		for _, r := range reject {
+			if strings.Contains(detail, r) {
+				t.Errorf("reason %q wrongly mentions %q", detail, r)
+			}
+		}
+	}
+
+	t.Run("a resolved principal carries no reason", func(t *testing.T) {
+		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", creatorID))
+		got, detail := ResolveAutopilotTriggerPrincipalDetail(ctx, fx.q, triggerID, apUUID, wsUUID)
+		if util.UUIDToString(got) != creatorID {
+			t.Fatalf("principal = %q, want %q", util.UUIDToString(got), creatorID)
+		}
+		if detail != "" {
+			t.Errorf("reason = %q, want empty on success", detail)
+		}
+	})
+
+	t.Run("no owner names the NULL created_by, not agent access", func(t *testing.T) {
+		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, nil, nil))
+		mustFail(t, triggerID,
+			[]string{"records no owner", "created_by", util.UUIDToString(triggerID)},
+			[]string{"not a current member", "not a member-type", "assignee agent"})
+	})
+
+	t.Run("non-member owner names the created_by_type", func(t *testing.T) {
+		// An agent-typed owner: the row HAS an owner, so "records no owner" would be
+		// a false statement about the data.
+		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "agent", agentID))
+		mustFail(t, triggerID,
+			[]string{"not a member-type", `created_by_type="agent"`, agentID},
+			[]string{"records no owner", "not a current member"})
+	})
+
+	t.Run("non-member-of-workspace names the owner id and workspace", func(t *testing.T) {
+		// The OPS-747 shape: created_by_type='member' with a user id that is not a
+		// current member of this workspace (there, a stale duplicate of a user who
+		// IS present under another id). Both backfills skip it, because the column
+		// is already non-NULL.
+		removed := fx.member(t, "detail-removed")
+		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", removed))
+		if got, _ := ResolveAutopilotTriggerPrincipalDetail(ctx, fx.q, triggerID, apUUID, wsUUID); !got.Valid {
+			t.Fatal("precondition: an in-workspace owner must resolve")
+		}
+		fx.Exec(t, `DELETE FROM member WHERE workspace_id = $1 AND user_id = $2`, fx.WorkspaceID, removed)
+		mustFail(t, triggerID,
+			[]string{"not a current member", removed, fx.WorkspaceID},
+			[]string{"records no owner", "not a member-type"})
+	})
+
+	t.Run("a trigger from another autopilot names the binding, not the owner", func(t *testing.T) {
+		otherAutopilotID, _ := fx.autopilotWithTrigger(t, agentID, creatorID, creatorID)
+		triggerID := util.MustParseUUID(fx.trigger(t, autopilotID, "member", creatorID))
+		got, detail := ResolveAutopilotTriggerPrincipalDetail(ctx, fx.q, triggerID, util.MustParseUUID(otherAutopilotID), wsUUID)
+		if got.Valid {
+			t.Fatalf("cross-autopilot trigger resolved %q", util.UUIDToString(got))
+		}
+		if !strings.Contains(detail, "is not bound to autopilot") || !strings.Contains(detail, otherAutopilotID) {
+			t.Errorf("reason %q should name the autopilot the trigger is not bound to", detail)
 		}
 	})
 }

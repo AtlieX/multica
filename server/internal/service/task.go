@@ -676,8 +676,32 @@ func triggerOwnerAttribution(ctx context.Context, q *db.Queries, triggerID, work
 //   - that member is STILL in the autopilot's workspace, re-checked on every
 //     dispatch, so removing someone actually revokes what their triggers can do.
 func ResolveAutopilotTriggerPrincipal(ctx context.Context, q *db.Queries, triggerID, autopilotID, workspaceID pgtype.UUID) pgtype.UUID {
+	principal, _ := ResolveAutopilotTriggerPrincipalDetail(ctx, q, triggerID, autopilotID, workspaceID)
+	return principal
+}
+
+// ResolveAutopilotTriggerPrincipalDetail is ResolveAutopilotTriggerPrincipal plus
+// the specific reason it resolved nobody, so a skip log can name which of the
+// fail-closed conditions actually fired instead of listing all of them.
+//
+// The reason is empty when a principal resolved, and is written for a human
+// reading `docker logs multica-backend-1 | grep 'autopilot dispatch skipped'`: it
+// always names the FIELD that diverged and the id to look up next, because the
+// previous single catch-all string ("this trigger's owner lacks access to the
+// private assignee agent, or the trigger records no owner") conflated three
+// unrelated DB states. OPS-747 burned a whole diagnosis pass on the agent-ACL
+// reading of that sentence, comparing agent.visibility and the AUTOPILOT's
+// created_by — both healthy — before a second pass found the divergent field was
+// the TRIGGER row's created_by: a duplicate user record for the same person, where
+// the trigger kept a stale user id that migration 467's backfill skipped because
+// the row already had a non-null created_by_type='member'. Each branch below is one
+// SQL check for whoever reads it next (OPS-749).
+//
+// Never returns an error and never logs: callers decide whether a miss is a skip
+// (admission) or a degrade (attribution).
+func ResolveAutopilotTriggerPrincipalDetail(ctx context.Context, q *db.Queries, triggerID, autopilotID, workspaceID pgtype.UUID) (pgtype.UUID, string) {
 	if q == nil || !triggerID.Valid || !autopilotID.Valid || !workspaceID.Valid {
-		return pgtype.UUID{}
+		return pgtype.UUID{}, "dispatch carries no trigger, autopilot or workspace id to resolve an owner from"
 	}
 	trig, err := q.GetAutopilotTriggerForAutopilot(ctx, db.GetAutopilotTriggerForAutopilotParams{
 		ID:          triggerID,
@@ -685,18 +709,31 @@ func ResolveAutopilotTriggerPrincipal(ctx context.Context, q *db.Queries, trigge
 		WorkspaceID: workspaceID,
 	})
 	if err != nil {
-		return pgtype.UUID{}
+		// Either the trigger row is gone, or it is not bound to this autopilot and
+		// workspace. Both are "no owner is resolvable", and the ids below are what
+		// a reader needs to tell those apart in one query.
+		return pgtype.UUID{}, fmt.Sprintf("trigger %s is not bound to autopilot %s in workspace %s, or no longer exists",
+			util.UUIDToString(triggerID), util.UUIDToString(autopilotID), util.UUIDToString(workspaceID))
 	}
-	if !trig.CreatedByType.Valid || trig.CreatedByType.String != "member" || !trig.CreatedByID.Valid {
-		return pgtype.UUID{}
+	if !trig.CreatedByType.Valid || !trig.CreatedByID.Valid {
+		return pgtype.UUID{}, fmt.Sprintf("trigger %s records no owner (created_by is NULL); neither backfill could infer one",
+			util.UUIDToString(triggerID))
+	}
+	if trig.CreatedByType.String != "member" {
+		return pgtype.UUID{}, fmt.Sprintf("trigger %s owner %s is not a member-type principal (created_by_type=%q), so it cannot authorize a dispatch",
+			util.UUIDToString(triggerID), util.UUIDToString(trig.CreatedByID), trig.CreatedByType.String)
 	}
 	if _, err := q.GetMemberByUserAndWorkspace(ctx, db.GetMemberByUserAndWorkspaceParams{
 		UserID:      trig.CreatedByID,
 		WorkspaceID: workspaceID,
 	}); err != nil {
-		return pgtype.UUID{}
+		// Named separately from "no owner" because the shapes diverge: the member
+		// may have been removed, or — as in OPS-747 — the id is a stale duplicate
+		// of a user who IS present under a different id with the same email.
+		return pgtype.UUID{}, fmt.Sprintf("trigger %s owner %s is not a current member of workspace %s (removed, or a stale duplicate user id)",
+			util.UUIDToString(triggerID), util.UUIDToString(trig.CreatedByID), util.UUIDToString(workspaceID))
 	}
-	return trig.CreatedByID
+	return trig.CreatedByID, ""
 }
 
 // ErrAttributionFailClosed signals that a run resolved to no precise accountable
