@@ -703,11 +703,19 @@ func writeWorkflowAutopilot(b *strings.Builder) {
 // step is what made this one bloat in the first place.
 //
 // Squad leaders keep one status bullet: a dispatch turn leaves the parent
-// mid-flight, so its end-of-turn fact is in_progress, and in_review waits for
+// mid-flight, so its end-of-turn fact is in_progress, and the wrap-up waits for
 // the re-trigger (member update / stage barrier) that confirms the overall
 // goal is met. Flipping the parent on the dispatch turn would mark unfinished
-// multi-stage work as ready for review; see the Squad Operating Protocol and
+// multi-stage work as finished; see the Squad Operating Protocol and
 // child-done system comments.
+//
+// The delivered bullet used to send every delivery to in_review and say
+// "`done` stays human". On an instance where no human works the review queue
+// that parks the issue on the agent that just finished, and the daemon
+// dispatches nothing from there (SLM-386). It also claimed stage barriers key
+// off in_review; isTerminalChildStatus counts only done and cancelled, so a
+// sub-issue left in_review never woke its parent. The bullet now requires an
+// owner for the next step and states the real barrier condition.
 //
 // ctx.IsSquadLeader is a PER-TASK role, not agent configuration: branching on
 // it here does move brief bytes when the same agent runs leader one turn and
@@ -728,11 +736,11 @@ func writeWorkflowIssue(b *strings.Builder, ctx TaskContextForEnv) {
 
 	b.WriteString("**Issue status — write the state the issue is in, whenever it changes** (skip any status call your Agent Identity forbids)\n\n")
 	b.WriteString("Status reflects the state the ISSUE is in, not your run's lifecycle — keep it true at every point in the turn, not only at checkpoints: write the new value the moment your work changes it, mid-turn included. Write only when the new value differs from the current one, whoever the assignee is:\n\n")
-	b.WriteString("- You delivered what the issue itself asks for and it awaits acceptance → `in_review`. Delivering an issue assigned to you — including a sub-issue in a chain or stage — always lands here; stage barriers and parent notifications depend on that signal. `done` stays human.\n")
+	b.WriteString("- You delivered what the issue itself asks for → leave the issue with whoever acts next; never park it on yourself. When your Agent Identity has handoff or closing rules, follow them. Otherwise: if someone else must accept the work, assign them and write the status that dispatches them (`todo` for an agent), with a comment saying what to check; if nothing remains to accept, write `done`. `in_review` is only correct when the next owner is already the assignee: an `in_review` issue still assigned to you is dispatched to nobody, and naming the next owner in a comment is not a handoff. A sub-issue in a chain or stage counts as finished for its parent only at `done` or `cancelled`; `in_review` neither closes a stage nor notifies the parent.\n")
 	b.WriteString("- The issue's work continues beyond this turn — you dispatched sub-issues, or delivered one part with more underway → `in_progress`.\n")
 	b.WriteString("- You cannot proceed without something you are missing → `blocked`, and post a comment explaining the blocker unless your Agent Identity forbids issue comments.\n")
 	if ctx.IsSquadLeader {
-		b.WriteString("- Squad leader: dispatching members is not delivery — a dispatch turn leaves the parent `in_progress`, and it moves to `in_review` only on the later turn (a member update or stage-barrier re-trigger) where you confirm the overall goal is met.\n")
+		b.WriteString("- Squad leader: dispatching members is not delivery — a dispatch turn leaves the parent `in_progress`, and you wrap it up under the delivered rule above only on the later turn (a member update or stage-barrier re-trigger) where you confirm the overall goal is met.\n")
 	}
 	// Emitted only when the workspace has custom statuses (MUL-6460): the
 	// bullets above stay category rules and need no rewording, but the agent

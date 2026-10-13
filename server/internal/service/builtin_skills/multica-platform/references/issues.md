@@ -246,7 +246,8 @@ writes the literal `done` key.
   turn that advances the issue's own ask sets `in_progress` as soon as that
   is known, so the board shows the work while it runs; a blocker is recorded
   when it is hit; and the turn must not exit with a stale value — delivered
-  the issue's own ask → `in_review`; work continues beyond the turn
+  the issue's own ask → hand it to whoever acts next (assign them and write
+  `todo`), or `done` when nothing remains to accept; work continues beyond the turn
   (dispatched sub-issues, partial delivery) → `in_progress`; stuck →
   `blocked`. A turn that produces none of the issue's own deliverable —
   answering a question, consulting on work owned elsewhere — writes nothing
@@ -255,10 +256,13 @@ writes the literal `done` key.
   issue asks for (a review-the-PR issue is being worked the moment reviewing
   starts). Questions, discussion, or acknowledgements never move the status.
   Squad leaders: dispatching members is not delivery — a dispatch turn
-  leaves the parent `in_progress`, and it moves to `in_review` only when a
+  leaves the parent `in_progress`, and it is wrapped up only when a
   later re-trigger confirms the overall goal is met.
 - **`in_review`** is an accepted issue status. Some workflows use it while a PR
-  is open and awaiting review; moving to it is an explicit mutation.
+  is open and awaiting review; moving to it is an explicit mutation. Set it
+  only when the next owner is already the assignee: an `in_review` issue still
+  assigned to the agent that set it is dispatched to nobody, and it does not
+  count as finished for a parent's stage (only `done` and `cancelled` do).
 - **`done`** on a child issue posts a system comment on its parent. If a PR
   carries close intent (`Closes MUL-XXXX`), it advances the issue to `done`
   itself on merge — you do not also need to flip it manually.
