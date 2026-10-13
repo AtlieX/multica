@@ -208,12 +208,14 @@ func TestStatusRuleIsFactJudgmentAtBothMoments(t *testing.T) {
 		"the board should show the issue being worked while you work, not only after",
 		// No assignee gate: the judgment applies to whoever is running.
 		"whoever the assignee is",
-		// Delivery lands in in_review and the ceiling keeps `done` human.
-		"`done` stays human",
-		// Assigned deliverables must not be misread as status-neutral
-		// research: stage barriers and parent notifications key off the
-		// delivery write.
-		"stage barriers and parent notifications depend on that signal",
+		// Delivery must leave the issue owned by whoever acts next. A bare
+		// in_review parks it on the agent that just finished, where the
+		// daemon dispatches nothing (SLM-386).
+		"never park it on yourself",
+		"an `in_review` issue still assigned to you is dispatched to nobody",
+		// The barrier fact must match isTerminalChildStatus: only done and
+		// cancelled finish a sub-issue for its parent.
+		"`in_review` neither closes a stage nor notifies the parent",
 		// Invariant 1: conversation does not move the board. Ancillary is
 		// defined by OUTPUT (no part of the issue's own deliverable), not by
 		// activity words like "research" that also describe real work.
