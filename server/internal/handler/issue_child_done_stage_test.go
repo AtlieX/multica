@@ -171,19 +171,39 @@ func TestStageAdvanceInstruction(t *testing.T) {
 		}
 		// It must make clear that finishing the stage != the whole issue is
 		// done, and hand both paths (wrap up / create the next stage) to the
-		// leader. The explicit in_review command marks the wrap-up moment;
-		// the write itself is authorized by the standing status-ownership
-		// grant (MUL-6300), not by this ask.
+		// leader.
 		if !strings.Contains(got, "does not mean the whole issue is done") {
 			t.Fatalf("expected stage-done != issue-done framing, got %q", got)
 		}
 		if !strings.Contains(got, "next stage") {
 			t.Fatalf("expected create-next-stage guidance, got %q", got)
 		}
-		if !strings.Contains(got, "multica issue status "+parentID+" in_review") {
-			t.Fatalf("expected explicit in_review instruction for confirmed completion, got %q", got)
-		}
+		assertOwnedWrapUp(t, got, parentID)
 	})
+}
+
+// assertOwnedWrapUp checks the wrap-up clause leaves the parent owned. A bare
+// `status <id> in_review` command is the regression: leaders ran it literally
+// and stopped, parking the parent on themselves where the daemon never
+// dispatches it (SLM-386).
+func assertOwnedWrapUp(t *testing.T, got, parentID string) {
+	t.Helper()
+	if strings.Contains(got, "multica issue status "+parentID+" in_review") {
+		t.Fatalf("must not hand the leader a bare in_review command, got %q", got)
+	}
+	for _, want := range []string{
+		"multica issue status " + parentID + " done",
+		"multica issue assign " + parentID + " --to",
+		"multica issue status " + parentID + " todo",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected wrap-up to offer %q, got %q", want, got)
+		}
+	}
+}
+
+func TestParentWrapUpInstruction(t *testing.T) {
+	assertOwnedWrapUp(t, parentWrapUpInstruction("parent-uuid"), "parent-uuid")
 }
 
 // A stage can close because its last open child is *cancelled*, not only

@@ -356,13 +356,13 @@ func (h *Handler) postChildDoneComment(ctx context.Context, parent, completed db
 	} else {
 		if batch {
 			content = fmt.Sprintf(
-				"%sAll sub-issues are complete — they just finished together in a batch update, most recently [%s](mention://issue/%s) — \"%s\". Continue the parent: synthesize the children's results and move it forward, or — if nothing remains — run `multica issue status %s in_review` to mark the parent ready for review.",
-				mentionPrefix, identifier, childID, title, parentID,
+				"%sAll sub-issues are complete — they just finished together in a batch update, most recently [%s](mention://issue/%s) — \"%s\". Continue the parent: synthesize the children's results and move it forward, or — if nothing remains — %s",
+				mentionPrefix, identifier, childID, title, parentWrapUpInstruction(parentID),
 			)
 		} else {
 			content = fmt.Sprintf(
-				"%sAll sub-issues are complete — the last one, [%s](mention://issue/%s) — \"%s\", just finished. Continue the parent: synthesize the children's results and move it forward, or — if nothing remains — run `multica issue status %s in_review` to mark the parent ready for review.",
-				mentionPrefix, identifier, childID, title, parentID,
+				"%sAll sub-issues are complete — the last one, [%s](mention://issue/%s) — \"%s\", just finished. Continue the parent: synthesize the children's results and move it forward, or — if nothing remains — %s",
+				mentionPrefix, identifier, childID, title, parentWrapUpInstruction(parentID),
 			)
 		}
 	}
@@ -584,7 +584,25 @@ func stageAdvanceInstruction(nextStage int32, parentID string) string {
 			nextStage, parentID, nextStage,
 		)
 	}
-	return fmt.Sprintf(" Completing this stage does not mean the whole issue is done. Decide whether the issue is actually complete — if so, synthesize the results and run `multica issue status %s in_review` to mark the parent ready for review — or whether the next stage still needs to be created, in which case create that stage and its sub-issues now.", parentID)
+	return fmt.Sprintf(" Completing this stage does not mean the whole issue is done. Decide whether the issue is actually complete or whether the next stage still needs to be created. If a next stage is needed, create that stage and its sub-issues now. If the issue is complete, synthesize the results and %s", parentWrapUpInstruction(parentID))
+}
+
+// parentWrapUpInstruction is the closing clause of every "all children are
+// finished" system comment: what the leader does with the parent once nothing
+// remains.
+//
+// It used to be a bare `multica issue status <id> in_review`. Leaders ran that
+// command literally and stopped, which left the parent in_review with the
+// leader still assigned. The daemon dispatches on assignee + todo, so nobody
+// was ever going to pick the card up (SLM-386, 2026-10-13: the leader named
+// the reviewer in its comment and never assigned them). The clause now offers
+// only the two exits that leave the parent owned: close it, or hand it to a
+// named reviewer in the same turn.
+func parentWrapUpInstruction(parentID string) string {
+	return fmt.Sprintf(
+		"finish the parent in this same turn, one of two ways. If you have verified the outcome yourself, close it with `multica issue status %s done`. If it needs an independent check, hand it to a named reviewer with `multica issue assign %s --unassign`, `multica issue assign %s --to \"<agent>\"` and `multica issue status %s todo`, plus a comment saying exactly what to verify. Do not set `in_review` and stop: an `in_review` issue that is still assigned to you is not dispatched to anyone.",
+		parentID, parentID, parentID, parentID,
+	)
 }
 
 // sanitizeChildTitleForSystemComment removes mention-style markdown from a
