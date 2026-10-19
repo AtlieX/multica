@@ -1659,7 +1659,12 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 				// webhook heals the stored decision.
 				declared = false
 			}
-			closeIntent := declared && !preserveCloseIntent
+			// After a terminal event, close_intent only ratchets upward: the
+			// upsert ORs the stored value with this parse. A merged PR that
+			// gains a closing keyword can still declare delivery, so the done
+			// gate lets the issue close; an edit can never retract one and
+			// silently un-deliver shipped work. (SPA-174)
+			closeIntent := declared
 			if err := h.Queries.LinkIssueToPullRequest(ctx, db.LinkIssueToPullRequestParams{
 				IssueID:             issue.ID,
 				PullRequestID:       pr.ID,
@@ -1689,7 +1694,10 @@ func (h *Handler) mirrorPullRequestForWorkspace(ctx context.Context, wsID pgtype
 		// also prevents an "all closed-without-merge" sequence from
 		// silently auto-closing the issue — if nothing carrying closing
 		// intent was ever delivered, the user should decide manually.
-		if state == "merged" || state == "closed" {
+		// Only the terminal event itself advances issues. A post-terminal edit
+		// may raise close_intent (see above), but it must not retroactively
+		// move the issue to done; closing it stays a deliberate act.
+		if (state == "merged" || state == "closed") && !preserveCloseIntent {
 			// All linked issues belong to this workspace. Resolve custom statuses
 			// once per delivery; built-in statuses still need no catalog read.
 			resolver := issuestatus.NewResolver(wsID)

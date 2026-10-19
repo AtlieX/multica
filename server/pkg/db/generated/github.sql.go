@@ -283,7 +283,7 @@ INSERT INTO issue_pull_request (
 )
 ON CONFLICT (issue_id, pull_request_id) DO UPDATE SET
     close_intent = CASE
-        WHEN $6 THEN issue_pull_request.close_intent
+        WHEN $6 THEN issue_pull_request.close_intent OR EXCLUDED.close_intent
         ELSE EXCLUDED.close_intent
     END
 `
@@ -303,8 +303,9 @@ type LinkIssueToPullRequestParams struct {
 // close_intent reflects the PR's explicit close declaration at the moment
 // the webhook is allowed to update that intent. Open/edit/merge webhooks use
 // the current title/body parse result so authors can remove a closing keyword
-// before merge. Post-terminal edits can opt into preserving the stored value,
-// keeping the merge-time decision stable.
+// before merge. Post-terminal edits set preserve_close_intent, which makes the
+// stored value ratchet: it can rise (a merged PR gains a closing keyword) but
+// never fall (an edit cannot retract delivery of shipped work).
 func (q *Queries) LinkIssueToPullRequest(ctx context.Context, arg LinkIssueToPullRequestParams) error {
 	_, err := q.db.Exec(ctx, linkIssueToPullRequest,
 		arg.IssueID,

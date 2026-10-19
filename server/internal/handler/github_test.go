@@ -1484,8 +1484,9 @@ func TestWebhook_BareBodyMentionIsNotLinked(t *testing.T) {
 // row made it a no-op forever (the preserve gate kept the row hidden, and no
 // unlink surface existed to clear it).
 //
-// The close-intent decision still stays frozen at merge time: the PR appears,
-// but it does not retroactively advance the issue to done.
+// The edit does raise close_intent (SPA-174), so a deliberate `status done`
+// now passes the delivery gate, but the webhook itself does not retroactively
+// advance the issue to done.
 func TestWebhook_PostMergeClosingKeywordLinksThePR(t *testing.T) {
 	if testHandler == nil {
 		t.Skip("handler test fixture not initialized (no DB?)")
@@ -1544,13 +1545,74 @@ func TestWebhook_PostMergeClosingKeywordLinksThePR(t *testing.T) {
 		t.Errorf("linked PR state = %q, want merged", listed[0].State)
 	}
 
-	// Close intent stays a merge-time decision: the issue must not advance.
+	// The post-merge closing keyword ratchets close_intent up, so the done
+	// gate is satisfied (SPA-174).
+	agg, err := testHandler.Queries.GetIssuePullRequestCloseAggregate(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssuePullRequestCloseAggregate after post-merge edit: %v", err)
+	}
+	if agg.MergedWithCloseIntentCount != 1 {
+		t.Errorf("post-merge closing keyword should set close_intent: merged_with_close_intent = %d, want 1", agg.MergedWithCloseIntentCount)
+	}
+
+	// But the edit itself must not advance the issue.
 	got, err := testHandler.Queries.GetIssue(ctx, parseUUID(created.ID))
 	if err != nil {
 		t.Fatalf("GetIssue after post-merge edit: %v", err)
 	}
 	if got.Status != "in_progress" {
 		t.Errorf("post-merge closing keyword must not advance the issue: status = %q, want in_progress", got.Status)
+	}
+}
+
+// TestWebhook_PostMergeEditCannotRetractCloseIntent is the other half of the
+// SPA-174 ratchet: a PR merged with `Closes KEY` keeps close_intent when its
+// body is later edited to drop the keyword, so the edit cannot un-deliver work
+// that already shipped.
+func TestWebhook_PostMergeEditCannotRetractCloseIntent(t *testing.T) {
+	if testHandler == nil {
+		t.Skip("handler test fixture not initialized (no DB?)")
+	}
+	ctx := context.Background()
+	secret := "post-merge-retract-secret"
+	t.Setenv("GITHUB_WEBHOOK_SECRET", secret)
+
+	req := newRequest("POST", "/api/issues?workspace_id="+testWorkspaceID, map[string]any{
+		"title":  "delivered then edited",
+		"status": "in_progress",
+	})
+	w := testutil.Call(t, testHandler.CreateIssue, req).Want(http.StatusCreated)
+	var created IssueResponse
+	json.NewDecoder(w.Body).Decode(&created)
+
+	t.Cleanup(func() {
+		testPool.Exec(ctx, `DELETE FROM issue_pull_request WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM activity_log WHERE issue_id = $1`, created.ID)
+		testPool.Exec(ctx, `DELETE FROM github_pull_request WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM github_installation WHERE workspace_id = $1`, testWorkspaceID)
+		testPool.Exec(ctx, `DELETE FROM issue WHERE id = $1`, created.ID)
+	})
+
+	const installationID int64 = 30264010
+	if _, err := testHandler.Queries.CreateGitHubInstallation(ctx, db.CreateGitHubInstallationParams{
+		WorkspaceID:    parseUUID(testWorkspaceID),
+		InstallationID: installationID,
+		AccountLogin:   "post-merge-retract-acct",
+		AccountType:    "User",
+	}); err != nil {
+		t.Fatalf("CreateGitHubInstallation: %v", err)
+	}
+
+	firePRWebhook(t, secret, installationID, 1, "Real fix", "Closes "+created.Identifier, "feat/real-fix", "opened")
+	firePRWebhook(t, secret, installationID, 1, "Real fix", "Closes "+created.Identifier, "feat/real-fix", "merged")
+	firePRWebhook(t, secret, installationID, 1, "Real fix", "Refs "+created.Identifier, "feat/real-fix", "edited_merged")
+
+	agg, err := testHandler.Queries.GetIssuePullRequestCloseAggregate(ctx, parseUUID(created.ID))
+	if err != nil {
+		t.Fatalf("GetIssuePullRequestCloseAggregate: %v", err)
+	}
+	if agg.MergedWithCloseIntentCount != 1 {
+		t.Errorf("post-merge retraction must not clear close_intent: merged_with_close_intent = %d, want 1", agg.MergedWithCloseIntentCount)
 	}
 }
 
